@@ -96,17 +96,44 @@ struct ActivityParser {
         isComplete = true
     }
 
-    // MARK: No-HR variant: fixed 4-byte records from offset 44
+    // MARK: No-HR variant: fixed 4-byte records from offset 44, interleaved
+    // with occasional clock-resync records the flat layout doesn't warn about
+    // up front.
 
     private mutating func parseNoHrVariant(_ file: Data) throws {
         currentTimestamp = Int(file.u32LE(at: 34))
         var pos = 44
         let contentEnd = file.count - 4
-        guard contentEnd >= pos, (contentEnd - pos).isMultiple(of: 4) else {
-            throw ParseError.invalidTermination(offset: max(pos, contentEnd))
+        guard contentEnd >= pos else {
+            throw ParseError.invalidTermination(offset: pos)
         }
         while pos < contentEnd {
-            let varLo = Int(file.u8(at: pos))
+            let marker = file.u8(at: pos)
+
+            // Clock-resync record: 0xE2, one subcode byte, a 4-byte LE Unix
+            // timestamp, then 4 further bytes of unknown purpose. Verified
+            // byte-exact against a real Q Grant dump where the first
+            // occurrence's embedded timestamp equals the file's offset-8/34
+            // header timestamp; does not itself produce a sample.
+            if marker == 0xE2 {
+                guard pos + 10 <= contentEnd else {
+                    throw ParseError.truncated(offset: pos, context: "no-HR timestamp resync record")
+                }
+                currentTimestamp = Int(file.u32LE(at: pos + 2))
+                pos += 10
+                continue
+            }
+
+            // Two-byte filler seen between resync records; no known payload.
+            if marker == 0xFE, pos + 2 <= contentEnd, file.u8(at: pos + 1) == 0xFE {
+                pos += 2
+                continue
+            }
+
+            guard pos + 4 <= contentEnd else {
+                throw ParseError.truncated(offset: pos, context: "activity sample")
+            }
+            let varLo = Int(marker)
             let varHi = Int(file.u8(at: pos + 1))
             let hrByte = Int(file.u8(at: pos + 2))
             let flags = Int(file.u8(at: pos + 3))
@@ -129,6 +156,9 @@ struct ActivityParser {
                                           wearingState: 0))
             currentTimestamp += 60
             pos += 4
+        }
+        guard pos == contentEnd else {
+            throw ParseError.invalidTermination(offset: pos)
         }
     }
 
