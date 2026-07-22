@@ -13,10 +13,29 @@ final class FileEncryptedGetRequest: FossilRequest {
     private let baseIV: Data
 
     private var fileSize = 0
-    private var buffer = Data()
+    private var receiver = FileDownloadAccumulator()
     private var packetCount = 0
     private var ivIncrementor = 0x1F
     private(set) var fileData: Data?
+
+    func validatedFileData() throws -> Data {
+        guard let fileData else {
+            throw FossilError.unexpectedResponse("encrypted file download did not complete")
+        }
+        try FossilFileContainer.validate(
+            fileData, expectedHandle: UInt16(major) << 8 | UInt16(minor))
+        return fileData
+    }
+
+    /// Validated file content with the cooked 12-byte header and trailing
+    /// CRC removed, for parsers whose offsets are payload-relative.
+    func strippedFileData() throws -> Data {
+        guard let fileData else {
+            throw FossilError.unexpectedResponse("encrypted file download did not complete")
+        }
+        return try FossilFileContainer.payload(
+            from: fileData, expectedHandle: UInt16(major) << 8 | UInt16(minor))
+    }
 
     init(handle: UInt16, key: Data, phoneRandom: Data, watchRandom: Data) {
         self.major = UInt8((handle >> 8) & 0xFF)
@@ -49,23 +68,28 @@ final class FileEncryptedGetRequest: FossilRequest {
             guard !value.isEmpty else { return }
             switch value.u8(at: 0) & 0x0F {
             case 1:
-                guard value.count >= 8 else { return }
+                guard value.count >= 8 else {
+                    throw FossilError.unexpectedResponse("short encrypted file get open response")
+                }
+                guard value.u8(at: 1) == minor, value.u8(at: 2) == major else {
+                    throw FossilError.unexpectedResponse("encrypted file get response for wrong handle")
+                }
                 let status = value.u8(at: 3)
                 guard FossilResultCode.isSuccess(status) else {
                     throw FossilError.resultCode(status, context: "encrypted file get")
                 }
                 fileSize = Int(value.u32LE(at: 4))
-                guard fileSize <= fossilMaxFileSize else {
-                    throw FossilError.unexpectedResponse("declared file size \(fileSize) exceeds \(fossilMaxFileSize)")
-                }
-                buffer = Data()
-                buffer.reserveCapacity(fileSize)
+                try receiver.open(size: fileSize, context: "encrypted file download")
+                packetCount = 0
             case 8:
-                guard value.count >= 12 else { return }
-                guard Checksums.crc32(buffer) == value.u32LE(at: 8) else {
-                    throw FossilError.crcMismatch("encrypted file download")
+                guard value.count >= 12 else {
+                    throw FossilError.unexpectedResponse("short encrypted file get CRC response")
                 }
-                fileData = buffer
+                guard value.u8(at: 1) == minor, value.u8(at: 2) == major else {
+                    throw FossilError.unexpectedResponse("encrypted file get CRC response for wrong handle")
+                }
+                fileData = try receiver.finish(expectedCRC: value.u32LE(at: 8),
+                                               context: "encrypted file download")
                 isFinished = true
             case 9:
                 throw FossilError.timeout("encrypted download (watch reported timeout)")
@@ -73,7 +97,14 @@ final class FileEncryptedGetRequest: FossilRequest {
                 break
             }
         } else if uuid == FossilUUID.char0004 {
-            guard !value.isEmpty else { return }
+            guard receiver.state == .receivingPackets else {
+                // Let the shared state machine produce the canonical ordering error.
+                try receiver.append(packet: value, context: "encrypted file download")
+                return
+            }
+            guard !value.isEmpty else {
+                throw FossilError.unexpectedResponse("empty encrypted file data packet")
+            }
             var result: Data
             if packetCount == 1 {
                 // Find how many CTR blocks the watch advanced per packet.
@@ -82,7 +113,7 @@ final class FileEncryptedGetRequest: FossilRequest {
                     let candidate = try AESCipher.ctr(key: key,
                                                       iv: incrementedIV(by: summand),
                                                       data: value)
-                    let currentLength = buffer.count + candidate.count - 1
+                    let currentLength = receiver.buffer.count + candidate.count - 1
                     let expected: UInt8 = currentLength == fileSize ? 0x81 : 0x01
                     if candidate.u8(at: 0) == expected {
                         ivIncrementor = summand
@@ -100,13 +131,7 @@ final class FileEncryptedGetRequest: FossilRequest {
                                            data: value)
             }
             packetCount += 1
-            guard buffer.count + result.count <= fossilMaxFileSize else {
-                throw FossilError.unexpectedResponse("encrypted download exceeded \(fossilMaxFileSize) bytes")
-            }
-            buffer.append(result.slice(1, result.count - 1))
-            // Bit 7 of the (decrypted) flag byte marks the last packet; the
-            // opcode-8 frame on 0003 still finalizes the transfer.
-            _ = result.u8(at: 0) & 0x80
+            try receiver.append(packet: result, context: "encrypted file download")
         }
     }
 }

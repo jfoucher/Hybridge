@@ -11,6 +11,7 @@ import UIKit
 ///
 /// Only Apple Music is driven (`MPMusicPlayerController.systemMusicPlayer`);
 /// controlling another app's playback would need the private MediaRemote API.
+@MainActor
 final class MusicController {
     static let shared = MusicController()
 
@@ -24,25 +25,24 @@ final class MusicController {
     /// `action` per GB table: 0x02 play/pause, 0x03 next, 0x04 previous,
     /// 0x05 volume up, 0x06 volume down. No consent gate — the user opted in
     /// by assigning the Q button function (GB has no gate on this path either).
-    func performWatchAction(_ action: UInt8) {
-        DispatchQueue.main.async {
-            switch action {
-            case 0x02:
-                self.player.playbackState == .playing ? self.player.pause() : self.player.play()
-            case 0x03:
-                self.player.skipToNextItem()
-            case 0x04:
-                self.player.skipToPreviousItem()
-            case 0x05:
-                self.adjustVolume(by: 1.0 / 16.0)
-            case 0x06:
-                self.adjustVolume(by: -1.0 / 16.0)
-            default:
-                return
-            }
-            // GB echoes the received command back as the ack.
-            WatchManager.shared.write(Data([0x02, 0x05, action, 0x00]), to: FossilUUID.char0006)
+    func performWatchAction(_ action: UInt8, token: WatchConnectionToken) {
+        guard WatchManager.shared.validatesConnectionToken(token) else { return }
+        switch action {
+        case 0x02:
+            player.playbackState == .playing ? player.pause() : player.play()
+        case 0x03:
+            player.skipToNextItem()
+        case 0x04:
+            player.skipToPreviousItem()
+        case 0x05:
+            adjustVolume(by: 1.0 / 16.0)
+        case 0x06:
+            adjustVolume(by: -1.0 / 16.0)
+        default:
+            return
         }
+        // GB echoes the received command back as the ack.
+        WatchManager.shared.acknowledgeMediaAction(action, token: token)
     }
 
     // MARK: - Volume (foreground-only best effort; iOS has no background API)

@@ -7,6 +7,7 @@ import UIKit
 /// icons are SF Symbols rendered to 24×24 and matched to notifications by
 /// CRC32 of the bundle ID (the ANCS app identifier the watch sees once
 /// bonded). Ships a curated default set; users can add their own bundle IDs.
+@MainActor
 final class NotificationIconStore: ObservableObject {
     static let shared = NotificationIconStore()
 

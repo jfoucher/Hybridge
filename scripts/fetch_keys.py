@@ -24,13 +24,8 @@ Your password is read with getpass (never echoed, never stored). Prefer typing
 it at the prompt over passing it any other way, so it does not end up in your
 shell history or environment.
 
-Dependencies: NONE for the common case — it uses only the Python standard
-library (urllib). The API sits behind Cloudflare; if Cloudflare serves a hard
-JavaScript challenge (you'll see an HTTP 403 with a "just a moment" page), the
-stdlib client can't solve it and the script automatically retries with the
-optional `cloudscraper` package *if it is installed*:
-    python3 -m pip install --user cloudscraper
-Most accounts don't need it.
+Dependencies: none. Run this only on a computer you control. Keys are redacted
+unless --show-keys is passed explicitly.
 """
 import argparse
 import base64
@@ -90,19 +85,6 @@ class StdlibTransport:
             return err.code, body
 
 
-class CloudscraperTransport:
-    """Fallback that runs Cloudflare's JS challenge via the optional package."""
-
-    def __init__(self):
-        import cloudscraper  # imported lazily; only reached on a real challenge
-
-        self._scraper = cloudscraper.create_scraper()
-
-    def request(self, method, url, *, headers=None, json_body=None):
-        resp = self._scraper.request(method, url, headers=headers, json=json_body)
-        return resp.status_code, resp.text
-
-
 def fetch_keys(transport, base_url, email, password):
     status, body = transport.request(
         "POST", base_url + "rpc/auth/login", json_body={"email": email, "password": password}
@@ -132,6 +114,11 @@ def main() -> int:
         help="which vendor's cloud to log in to (default: fossil)",
     )
     parser.add_argument(
+        "--show-keys",
+        action="store_true",
+        help="explicitly print authentication keys to this terminal",
+    )
+    parser.add_argument(
         "--email",
         default=os.environ.get("FOSSIL_EMAIL"),
         help="account email (or set FOSSIL_EMAIL; otherwise you'll be prompted)",
@@ -145,16 +132,7 @@ def main() -> int:
     try:
         items = fetch_keys(StdlibTransport(), base_url, email, password)
     except CloudflareChallenge:
-        try:
-            transport = CloudscraperTransport()
-        except ImportError:
-            sys.exit(
-                "Cloudflare served a JavaScript challenge that the built-in client can't\n"
-                "solve. Install the optional helper and re-run:\n"
-                "    python3 -m pip install --user cloudscraper"
-            )
-        print("Cloudflare challenge detected — retrying with cloudscraper…", file=sys.stderr)
-        items = fetch_keys(transport, base_url, email, password)
+        sys.exit("Cloudflare served a browser-only challenge; no credentials were sent to a fallback service.")
 
     if not items:
         print("No watches registered to this account.")
@@ -167,7 +145,7 @@ def main() -> int:
         # The API returns 32 raw bytes base64-encoded; the watch key is the
         # first 16 (32 hex chars). Some entries have no key (non-HR watches).
         key = base64.b64decode(secret).hex()[:32] if secret else "(none — not an HR watch)"
-        print(f"{item['id']:<28} {key}")
+        print(f"{item['id']:<28} {key if args.show_keys else '(redacted; use --show-keys)'}")
     return 0
 
 

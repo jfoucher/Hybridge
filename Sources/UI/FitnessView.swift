@@ -16,6 +16,8 @@ struct FitnessView: View {
     @State private var chartVisibleDuration: TimeInterval = 86400
     @State private var chartScrollPosition = Date()
     @State private var chartViewportInitialized = false
+    @State private var quarantinedActivity: ActivityQuarantineRecord?
+    @State private var quarantinedActivityURL: URL?
     @AppStorage("healthAutoExportEnabled") private var autoExportEnabled = false
 
     private var kind: WatchKind {
@@ -64,6 +66,10 @@ struct FitnessView: View {
                     .padding(.horizontal, 4).padding(.top, 8)
                 }
 
+                if let quarantinedActivity {
+                    activityQuarantineCard(quarantinedActivity)
+                }
+
                 group("Today") { todayCard }
                 group("Steps") { stepsCard }
                 if kind.hasHeartRate { group("Heart rate") { heartRateCard } }
@@ -105,10 +111,67 @@ struct FitnessView: View {
             .onChange(of: selectedDay) { _, _ in
                 resetChartViewport()
             }
+            .task(id: registry.activeWatchID) {
+                await refreshActivityQuarantine()
+            }
         }
     }
 
     // MARK: Layout helpers
+
+    private func activityQuarantineCard(_ record: ActivityQuarantineRecord) -> some View {
+        ThemedCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Activity sync needs attention", systemImage: "exclamationmark.triangle.fill")
+                    .font(Theme.sans(16, weight: .semibold, relativeTo: .body))
+                    .foregroundStyle(Theme.accent)
+                Text("The watch's activity file could not be read safely. Hybridge kept it on the watch and saved a diagnostic copy on this iPhone. Automatic sync will wait until the watch replaces the file.")
+                    .font(Theme.sans(13, relativeTo: .footnote))
+                    .foregroundStyle(Theme.sub)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("\(record.length.formatted()) bytes · retry \(record.retryCount.formatted())")
+                    .font(Theme.mono(11))
+                    .foregroundStyle(Theme.sub)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { quarantineActions }
+                    VStack(alignment: .leading, spacing: 10) { quarantineActions }
+                }
+            }
+            .padding(16)
+        }
+        .accessibilityIdentifier("fitness.activityQuarantine")
+    }
+
+    @ViewBuilder private var quarantineActions: some View {
+        Button("Retry now") {
+            runBusy("Retrying activity sync…") {
+                _ = try await watch.syncActivity(retryQuarantined: true)
+                await refreshActivityQuarantine()
+                return "Activity sync retry finished."
+            }
+        }
+        .disabled(busyText != nil || watch.connectionState != .ready)
+
+        if let quarantinedActivityURL {
+            ShareLink(item: quarantinedActivityURL) {
+                Label("Export raw file", systemImage: "square.and.arrow.up")
+            }
+        }
+    }
+
+    private func refreshActivityQuarantine() async {
+        guard let watchID = registry.activeWatchID else {
+            quarantinedActivity = nil
+            quarantinedActivityURL = nil
+            return
+        }
+        let record = await ActivityQuarantineStore.shared.record(for: watchID)
+        let url = await ActivityQuarantineStore.shared.exportURL(for: watchID)
+        await MainActor.run {
+            quarantinedActivity = record
+            quarantinedActivityURL = url
+        }
+    }
 
     /// A labelled section: small uppercase label + card, with top spacing.
     private func group<C: View>(_ label: LocalizedStringResource,

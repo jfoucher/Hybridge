@@ -1,5 +1,5 @@
 import Foundation
-import CoreBluetooth
+@preconcurrency import CoreBluetooth
 import os.log
 import UIKit
 
@@ -14,6 +14,36 @@ struct DiscoveredWatch: Identifiable {
     let name: String
     let rssi: Int
     var id: UUID { peripheral.identifier }
+}
+
+/// Pure authorization policy for every watch-originated phone action. Keeping
+/// the decision separate from CoreBluetooth makes the fail-closed lifecycle
+/// cases exhaustively testable without manufacturing a CBPeripheral.
+struct WatchActionAuthorization {
+    static func allows(token: WatchConnectionToken?,
+                       attachedPeripheralID: UUID?,
+                       activeWatchID: UUID?,
+                       trusted: Bool,
+                       sessionReady: Bool,
+                       sessionAuthenticated: Bool,
+                       connectedKind: WatchKind) -> Bool {
+        guard let token,
+              token.peripheralID == attachedPeripheralID,
+              token.watchID == activeWatchID,
+              token.kind == connectedKind,
+              trusted,
+              sessionReady else { return false }
+        switch connectedKind {
+        case .fossilQ:
+            // Q has no protocol authentication; explicit enrollment is its
+            // trust root, reinforced by the exact live connection token.
+            return true
+        case .hybridHR:
+            return sessionAuthenticated
+        case .misfitQ, .unknown:
+            return false
+        }
+    }
 }
 
 /// A deliberately narrow one-way transfer into a serial dispatch queue. This
@@ -56,12 +86,19 @@ enum ConnectionState: Equatable {
 final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
     static let shared = WatchManager()
 
-    @Published var connectionState: ConnectionState = .disconnected
+    @Published var connectionState: ConnectionState = .disconnected {
+        didSet { connectionObservationDate = Date() }
+    }
+    @Published private(set) var connectionObservationDate = Date()
     @Published var discovered: [DiscoveredWatch] = []
     /// True while a scan runs. Separate from connectionState: scanning for a
     /// second watch must not disturb the state of the connected one.
     @Published var isScanning = false
     @Published var batteryLevel: Int?
+    /// Updated only when a battery value is actually observed.  The setter is
+    /// module-internal because the family-specific WatchManager extensions
+    /// publish configuration reads from their own source files.
+    @Published var batteryObservationDate: Date?
     @Published var firmwareVersion: String?
     @Published var modelNumber: String?
     /// Hardware family of the connected watch, detected from the firmware
@@ -85,9 +122,7 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
     /// Name of the last watchface we activated on the active watch
     /// (persisted per watch; the protocol has no way to ask the watch which
     /// face is showing). Loaded in init and on watch switches.
-    @Published var activeWatchfaceName: String? {
-        didSet { UserDefaults.standard.set(activeWatchfaceName, forKey: WatchScoped.key(.activeWatchfaceName)) }
-    }
+    @Published var activeWatchfaceName: String?
     /// Background of the active watchface, downloaded from the watch itself
     /// and decoded from its .wapp (GB: FossilFileReader.getBackground).
     @Published var activeWatchfaceImage: UIImage?
@@ -96,6 +131,9 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
     private let logger = Logger(subsystem: "eu.sixpixels.hybridge", category: "ble")
     private var central: CBCentralManager!
     private var peripheral: CBPeripheral?
+    private let connectionIdentityLock = NSLock()
+    nonisolated(unsafe) private var connectionGeneration: UInt64 = 0
+    nonisolated(unsafe) private var connectionTokenStorage: WatchConnectionToken?
     private var characteristics: [CBUUID: CBCharacteristic] = [:]
     /// Vendor characteristics whose notify-enable is still unconfirmed.
     private var pendingNotifyChars: Set<CBUUID> = []
@@ -138,12 +176,13 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
     /// connects are cancelled once the central is powered on (iOS would
     /// otherwise keep them alive forever).
     private var strayRestoredPeripherals: [CBPeripheral] = []
-    /// Guards the first-launch auto-connect so only one discovery triggers
-    /// it per scan session (on bleQueue).
-    private var autoConnectAttempted = false
     /// bleQueue copy of scanShowsAllDevices (didDiscover runs per advert —
     /// no queue hop for the read).
     private var showAllInScan = false
+    /// BLE-queue trust mirrors used for watch-originated phone actions.
+    private var sessionReady = false
+    private var sessionAuthenticated = false
+    private var connectedKind: WatchKind = .unknown
 
     /// Fires while the app is running to keep a long foreground session
     /// fresh (battery/steps, clock drift, due activity sync). iOS can't run
@@ -201,6 +240,67 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    func connectionTokenSync() -> WatchConnectionToken? {
+        connectionIdentityLock.withLock { connectionTokenStorage }
+    }
+
+    func validatesConnectionToken(_ token: WatchConnectionToken?) -> Bool {
+        guard let token, let current = connectionTokenSync() else { return false }
+        return token.authorizes(current)
+    }
+
+    /// On bleQueue. Every attachment/re-attachment gets a fresh generation.
+    private func establishConnectionToken(for peripheral: CBPeripheral) {
+        let knownKind = WatchRegistry.knownWatchesSync()
+            .first(where: { $0.id == peripheral.identifier })?.kind ?? .unknown
+        connectionIdentityLock.withLock {
+            connectionGeneration &+= 1
+            connectionTokenStorage = WatchConnectionToken(
+                watchID: peripheral.identifier,
+                peripheralID: peripheral.identifier,
+                generation: connectionGeneration,
+                kind: knownKind)
+        }
+        connectedKind = knownKind
+        sessionReady = false
+        sessionAuthenticated = false
+    }
+
+    /// On bleQueue. Invalidating first ensures old queued work fails closed.
+    private func invalidateConnectionToken() {
+        connectionIdentityLock.withLock {
+            connectionGeneration &+= 1
+            connectionTokenStorage = nil
+        }
+        sessionReady = false
+        sessionAuthenticated = false
+        connectedKind = .unknown
+    }
+
+    private func updateConnectionKind(_ kind: WatchKind) {
+        connectionIdentityLock.withLock {
+            guard let token = connectionTokenStorage else { return }
+            connectionTokenStorage = WatchConnectionToken(
+                watchID: token.watchID, peripheralID: token.peripheralID,
+                generation: token.generation, kind: kind)
+        }
+        connectedKind = kind
+    }
+
+    func markSessionReady(for token: WatchConnectionToken) async -> Bool {
+        await withCheckedContinuation { continuation in
+            bleQueue.async {
+                guard self.validatesConnectionToken(token) else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                self.sessionReady = true
+                DispatchQueue.main.async { self.connectionState = .ready }
+                continuation.resume(returning: true)
+            }
+        }
+    }
+
     var fullLogText: String {
         let formatter = DateFormatter()
         formatter.dateFormat = "HH:mm:ss.SSS"
@@ -212,7 +312,6 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
     func startScan() {
         bleQueue.async {
             guard self.central.state == .poweredOn else { return }
-            self.autoConnectAttempted = false
             DispatchQueue.main.async {
                 self.discovered = []
                 self.isScanning = true
@@ -260,6 +359,7 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
             self.userWantsConnection = true
             self.autoPairOnNextInit = true
             self.peripheral = peripheral
+            self.establishConnectionToken(for: peripheral)
             peripheral.delegate = self
             DispatchQueue.main.async { self.connectionState = .connecting }
             self.central.connect(peripheral, options: nil)
@@ -290,6 +390,7 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
             }
             KeychainStore.deleteKey(for: id)
             WatchScoped.purge(watchID: id)
+            Task { await ActivityQuarantineStore.shared.clear(watchID: id) }
             WatchRegistry.shared.remove(id)
             if WatchRegistry.activeWatchIDSync() == id {
                 if let next = WatchRegistry.knownWatchesSync().first?.id {
@@ -320,6 +421,7 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
     /// userWantsConnection is cleared first so the old watch's didDisconnect
     /// can't re-arm its auto-reconnect.
     private func teardownSession() {
+        invalidateConnectionToken()
         userWantsConnection = false
         failCurrentRequest(FossilError.notConnected)
         if let old = peripheral {
@@ -340,6 +442,7 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
             self.isAuthenticated = false
             self.isDevicePaired = nil
             self.batteryLevel = nil
+            self.batteryObservationDate = nil
             self.firmwareVersion = nil
             self.modelNumber = nil
             self.watchKind = .unknown
@@ -373,6 +476,7 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
         guard let peripheral = candidate else { return }
         self.userWantsConnection = true
         self.peripheral = peripheral
+        establishConnectionToken(for: peripheral)
         peripheral.delegate = self
         if peripheral.state == .connected {
             // Restored while already connected — just resume discovery.
@@ -423,10 +527,18 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
             assertionFailure("run(\(request.name)) issued without holding WatchSession.exclusive — see WatchSession.swift")
             throw FossilError.sessionNotHeld(request.name)
         }
+        guard validatesConnectionToken(WatchSession.connectionToken) else {
+            throw FossilError.staleConnection
+        }
         let transferredRequest = QueueTransfer(value: request)
+        let expectedToken = WatchSession.connectionToken
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             bleQueue.async {
                 let request = transferredRequest.value
+                guard self.validatesConnectionToken(expectedToken) else {
+                    continuation.resume(throwing: FossilError.staleConnection)
+                    return
+                }
                 guard self.currentRequest == nil else {
                     let age = Int(Date().timeIntervalSince(self.currentRequestStarted))
                     continuation.resume(throwing: FossilError.unexpectedResponse("request already in flight (\(self.currentRequest!.name), \(age)s old)"))
@@ -511,8 +623,18 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
     /// the values returned by `authenticate()` directly, which keeps the IV
     /// seed local to each operation and immune to a concurrent handshake
     /// swapping shared state (see WatchActions.authenticate).
-    func markAuthenticated() {
-        DispatchQueue.main.async { self.isAuthenticated = true }
+    func markAuthenticated(for token: WatchConnectionToken) async -> Bool {
+        await withCheckedContinuation { continuation in
+            bleQueue.async {
+                guard self.validatesConnectionToken(token) else {
+                    continuation.resume(returning: false)
+                    return
+                }
+                self.sessionAuthenticated = true
+                DispatchQueue.main.async { self.isAuthenticated = true }
+                continuation.resume(returning: true)
+            }
+        }
     }
 
     // MARK: - Characteristic access for reads
@@ -535,14 +657,15 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
     /// otherwise the single/double/long presses of "forward to phone
     /// (multi-press)", mapped to the user's phone actions. On bleQueue.
     private func handleActionFrame(_ action: UInt8) {
-        guard WatchRegistry.activeKindSync() == .fossilQ else { return }
+        guard acceptsWatchOriginatedActions(),
+              let token = connectionTokenSync(), token.kind == .fossilQ else { return }
         let functions = QButtonStore.functions ?? []
         if action >= 0x05 || functions.contains(.musicControl) {
-            MusicController.shared.performWatchAction(action)
+            dispatchMusicAction(action, token: token)
             return
         }
         guard functions.contains(.forwardToPhoneMulti), (2...4).contains(action) else {
-            MusicController.shared.performWatchAction(action)
+            dispatchMusicAction(action, token: token)
             return
         }
         let pressIndex = Int(action) - 2   // 2 single, 3 double, 4 long
@@ -552,17 +675,18 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
         case .none:
             break
         case .volumeUp:
-            MusicController.shared.performWatchAction(0x05)
+            dispatchMusicAction(0x05, token: token)
         case .volumeDown:
-            MusicController.shared.performWatchAction(0x06)
+            dispatchMusicAction(0x06, token: token)
         case .playPause:
-            MusicController.shared.performWatchAction(0x02)
+            dispatchMusicAction(0x02, token: token)
         case .nextTrack:
-            MusicController.shared.performWatchAction(0x03)
+            dispatchMusicAction(0x03, token: token)
         case .previousTrack:
-            MusicController.shared.performWatchAction(0x04)
+            dispatchMusicAction(0x04, token: token)
         case .ringPhone:
             DispatchQueue.main.async {
+                guard self.validatesConnectionToken(token) else { return }
                 if PhoneFinder.shared.isRinging {
                     PhoneFinder.shared.stop()
                 } else {
@@ -572,17 +696,25 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    private func dispatchMusicAction(_ action: UInt8, token: WatchConnectionToken) {
+        DispatchQueue.main.async {
+            MusicController.shared.performWatchAction(action, token: token)
+        }
+    }
+
     /// Acts on a 0x08 button frame from a Q watch according to the assigned
     /// function (GB: handleBackgroundCharacteristic): RING_PHONE toggles the
     /// find-my-phone ringer; FORWARD_TO_PHONE just surfaces the press.
     /// Buttons are 1/2/3 = top/middle/bottom. On bleQueue.
     private func handleQButtonPress(_ button: Int) {
-        guard WatchRegistry.activeKindSync() == .fossilQ,
+        guard acceptsWatchOriginatedActions(),
+              let token = connectionTokenSync(), token.kind == .fossilQ,
               let functions = QButtonStore.functions,
               (1...3).contains(button) else { return }
         switch functions[button - 1] {
         case .ringPhone:
             DispatchQueue.main.async {
+                guard self.validatesConnectionToken(token) else { return }
                 if PhoneFinder.shared.isRinging {
                     PhoneFinder.shared.stop()
                 } else {
@@ -591,10 +723,37 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
             }
         case .forwardToPhone:
             DispatchQueue.main.async {
+                guard self.validatesConnectionToken(token) else { return }
                 ToastCenter.shared.success(String(localized: "Watch button pressed"))
             }
         default:
             break
+        }
+    }
+
+    private func acceptsWatchOriginatedActions() -> Bool {
+        dispatchPrecondition(condition: .onQueue(bleQueue))
+        let token = connectionTokenSync()
+        let trusted = token.map { candidate in
+            WatchRegistry.knownWatchesSync().contains {
+                $0.id == candidate.watchID && $0.trusted != false
+            }
+        } ?? false
+        return WatchActionAuthorization.allows(
+            token: token,
+            attachedPeripheralID: peripheral?.identifier,
+            activeWatchID: WatchRegistry.activeWatchIDSync(),
+            trusted: trusted,
+            sessionReady: sessionReady,
+            sessionAuthenticated: sessionAuthenticated,
+            connectedKind: connectedKind)
+    }
+
+    func acknowledgeMediaAction(_ action: UInt8, token: WatchConnectionToken) {
+        bleQueue.async {
+            guard self.validatesConnectionToken(token),
+                  self.acceptsWatchOriginatedActions() else { return }
+            self.write(Data([0x02, 0x05, action, 0x00]), to: FossilUUID.char0006)
         }
     }
 
@@ -608,8 +767,10 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
                    _ condition: () async -> Bool) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
+            guard !Task.isCancelled else { return false }
             if await condition() { return true }
-            try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            do { try await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000)) }
+            catch { return false }
         }
         return await condition()
     }
@@ -655,6 +816,7 @@ extension WatchManager: RequestIO {
     }
 
     func write(_ data: Data, to uuid: CBUUID) {
+        dispatchPrecondition(condition: .onQueue(bleQueue))
         guard let peripheral, let characteristic = characteristics[uuid] else { return }
         addLog("  write \(uuid.uuidString.prefix(8)): \(data.count <= 32 ? data.hexString : "\(data.count) bytes")")
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
@@ -754,17 +916,8 @@ extension WatchManager: CBCentralManagerDelegate {
                 self.discovered.append(DiscoveredWatch(peripheral: peripheral, name: shownName, rssi: RSSI.intValue))
             }
         }
-        // First launch (empty roster): connect to the first watch found
-        // instead of waiting for a tap. Never once a roster exists — a scan
-        // for a second watch must not auto-adopt whatever advertises first.
-        // Never for a device only listed because of the show-all escape hatch.
-        // Already on bleQueue here, so the flag check-and-set can't race a
-        // second discovery.
-        if watchLike, !hasKnownWatches, self.peripheral == nil, !autoConnectAttempted {
-            autoConnectAttempted = true
-            addLog("Auto-connecting to discovered \(shownName)")
-            connect(peripheral)
-        }
+        // Discovery is intentionally passive. Trust and persistence begin
+        // only after the user explicitly selects a scan result.
     }
 
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
@@ -783,6 +936,7 @@ extension WatchManager: CBCentralManagerDelegate {
         guard peripheral.identifier == self.peripheral?.identifier else { return }
         addLog("Connect failed: \(error?.localizedDescription ?? "unknown")")
         self.peripheral = nil
+        invalidateConnectionToken()
         DispatchQueue.main.async {
             self.connectionState = .failed(
                 error?.localizedDescription ?? String(localized: "connection failed"))
@@ -799,6 +953,7 @@ extension WatchManager: CBCentralManagerDelegate {
         addLog("Disconnected\(error.map { ": \($0.localizedDescription)" } ?? "")")
         failCurrentRequest(FossilError.notConnected)
         let shouldReconnect = userWantsConnection
+        invalidateConnectionToken()
         self.peripheral = nil
         self.characteristics = [:]
         self.pendingNotifyChars = []
@@ -808,6 +963,7 @@ extension WatchManager: CBCentralManagerDelegate {
             self.connectionState = shouldReconnect ? .connecting : .disconnected
             self.isAuthenticated = false
             self.batteryLevel = nil
+            self.batteryObservationDate = nil
             self.installedApps = []
         }
         if shouldReconnect {
@@ -815,6 +971,7 @@ extension WatchManager: CBCentralManagerDelegate {
             // back in range, surviving app suspension via state restoration.
             addLog("Auto-reconnect armed")
             self.peripheral = peripheral
+            establishConnectionToken(for: peripheral)
             peripheral.delegate = self
             central.connect(peripheral, options: nil)
         } else if !hasKnownWatches {
@@ -842,7 +999,22 @@ extension WatchManager: CBCentralManagerDelegate {
 // MARK: - CBPeripheralDelegate
 
 extension WatchManager: CBPeripheralDelegate {
+    /// CoreBluetooth may finish callbacks that were already queued when a
+    /// watch was switched or torn down. Reject them before they can mutate
+    /// characteristics, request state, or dispatch a phone-side action.
+    private func acceptsDelegateCallback(from peripheral: CBPeripheral) -> Bool {
+        dispatchPrecondition(condition: .onQueue(bleQueue))
+        guard self.peripheral?.identifier == peripheral.identifier,
+              let token = connectionTokenSync(),
+              token.peripheralID == peripheral.identifier else {
+            addLog("Ignored stale peripheral callback from \(peripheral.identifier)")
+            return false
+        }
+        return true
+    }
+
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
+        guard acceptsDelegateCallback(from: peripheral) else { return }
         if let error {
             addLog("Service discovery failed: \(error.localizedDescription)")
             DispatchQueue.main.async {
@@ -868,6 +1040,7 @@ extension WatchManager: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
+        guard acceptsDelegateCallback(from: peripheral) else { return }
         if let error {
             addLog("Char discovery failed for \(service.uuid): \(error.localizedDescription)")
             return
@@ -888,6 +1061,7 @@ extension WatchManager: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        guard acceptsDelegateCallback(from: peripheral) else { return }
         if let error {
             addLog("notify enable FAILED on \(characteristic.uuid.uuidString.prefix(8)): \(error.localizedDescription)")
         } else {
@@ -972,6 +1146,7 @@ extension WatchManager: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard acceptsDelegateCallback(from: peripheral) else { return }
         if let error {
             addLog("read/notify error on \(characteristic.uuid.uuidString.prefix(8)): \(error.localizedDescription)")
             return
@@ -980,10 +1155,14 @@ extension WatchManager: CBPeripheralDelegate {
         switch characteristic.uuid {
         case FossilUUID.batteryLevel:
             let level = Int(value.first ?? 0)
-            DispatchQueue.main.async { self.batteryLevel = level }
+            DispatchQueue.main.async {
+                self.batteryLevel = level
+                self.batteryObservationDate = Date()
+            }
         case FossilUUID.firmwareRevision:
             let version = String(data: value, encoding: .utf8) ?? ""
             let kind = WatchKind.detect(firmware: version)
+            updateConnectionKind(kind)
             addLog("Firmware: \(version) → \(kind.displayName)")
             if let id = self.peripheral?.identifier {
                 WatchRegistry.shared.updateKind(id, kind: kind, firmware: version)
@@ -1000,6 +1179,10 @@ extension WatchManager: CBPeripheralDelegate {
             }
             DispatchQueue.main.async { self.modelNumber = model }
         case FossilUUID.char0006:
+            guard acceptsWatchOriginatedActions() else {
+                addLog("Ignored watch-originated action before trusted ready state")
+                return
+            }
             addLog("event 0006: \(value.count <= 64 ? value.hexString : "\(value.count) bytes")")
             // JSON request from the watch: [.., 0x01, eventId, json...]
             if value.count > 3, value.u8(at: 1) == 0x01 {
@@ -1056,6 +1239,7 @@ extension WatchManager: CBPeripheralDelegate {
     }
 
     func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
+        guard acceptsDelegateCallback(from: peripheral) else { return }
         if let error {
             addLog("write FAILED on \(characteristic.uuid.uuidString.prefix(8)): \(error.localizedDescription)")
             failCurrentRequest(error)
@@ -1071,6 +1255,7 @@ extension WatchManager: CBPeripheralDelegate {
     }
 
     func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
+        guard acceptsDelegateCallback(from: peripheral) else { return }
         sendNextPackets()
     }
 }

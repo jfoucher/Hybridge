@@ -85,6 +85,10 @@ struct QNotificationsView: View {
         }
         .sheet(isPresented: $addingApp) {
             QAddAppView { bundleId, name in
+                alerts.removeAll {
+                    $0.kind == .app
+                        && $0.identifier.caseInsensitiveCompare(bundleId) == .orderedSame
+                }
                 alerts.append(QNotificationAlert(kind: .app, identifier: bundleId,
                                                  displayName: name,
                                                  degrees: nextFreePosition()))
@@ -342,11 +346,15 @@ private struct QAddAppView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
-                        let trimmed = bundleId.trimmingCharacters(in: .whitespaces)
-                        onAdd(trimmed, displayName.isEmpty ? trimmed : displayName)
+                        guard let normalized = ProtocolInputValidation.normalizedBundleID(bundleId) else {
+                            ToastCenter.shared.error(String(localized: "Enter a valid bundle ID"))
+                            return
+                        }
+                        onAdd(normalized, ProtocolInputValidation.displayName(
+                            displayName, fallback: normalized))
                         dismiss()
                     }
-                    .disabled(bundleId.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(ProtocolInputValidation.normalizedBundleID(bundleId) == nil)
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

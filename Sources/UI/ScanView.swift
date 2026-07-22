@@ -6,6 +6,7 @@ import SwiftUI
 struct ScanView: View {
     @EnvironmentObject var watch: WatchManager
     @Environment(\.dismiss) private var dismiss
+    @State private var pendingEnrollment: DiscoveredWatch?
 
     var addMode = false
 
@@ -40,11 +41,11 @@ struct ScanView: View {
                              : String(localized: "Tap Scan to search for your watch."))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                        Text("Press and hold the middle button on your watch until it vibrates and the hands start moving.")
                     }
                     ForEach(watch.discovered) { found in
                         Button {
-                            watch.connect(found.peripheral)
-                            if addMode { dismiss() }
+                            pendingEnrollment = found
                         } label: {
                             HStack {
                                 Text(found.name)
@@ -90,6 +91,21 @@ struct ScanView: View {
                         Button("Cancel") { dismiss() }
                     }
                 }
+            }
+            .alert("Add and trust this watch?", isPresented: Binding(
+                get: { pendingEnrollment != nil },
+                set: { if !$0 { pendingEnrollment = nil } }
+            ), presenting: pendingEnrollment) { found in
+                Button("Add & Connect") {
+                    pendingEnrollment = nil
+                    watch.connect(found.peripheral)
+                    if addMode { dismiss() }
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingEnrollment = nil
+                }
+            } message: { found in
+                Text("\(found.name) (\(found.rssi) dB)\n\nContinue only if this is your nearby watch and it is in pairing mode. Hybridge will verify its firmware, model, family, and authentication state after connecting. Older Fossil Q watches use an unencrypted Bluetooth file protocol, so explicit enrollment is their trust boundary.")
             }
         }
     }

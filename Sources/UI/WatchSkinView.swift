@@ -36,7 +36,11 @@ struct WatchSkinView: View {
                 }
                 Section {
                     Button("Remove all images", role: .destructive) {
-                        for slot in WatchSkinStore.Slot.allCases { skin.setUserImage(nil, for: slot) }
+                        Task {
+                            for slot in WatchSkinStore.Slot.allCases {
+                                _ = await skin.setUserImage(nil, for: slot)
+                            }
+                        }
                     }
                 }
             }
@@ -49,11 +53,24 @@ struct WatchSkinView: View {
         .onChange(of: pickerItem) { _, item in
             guard let slot = picking, let item else { return }
             Task {
-                let data = try? await item.loadTransferable(type: Data.self)
-                await MainActor.run {
-                    if let data { skin.setUserImage(data, for: slot) }
-                    pickerItem = nil
-                    picking = nil
+                do {
+                    guard let transfer = try await item.loadTransferable(
+                        type: BoundedPhotoTransfer.self) else {
+                        throw BoundedImageImportError.invalidImage
+                    }
+                    if !(await skin.setUserImage(transfer.pngData, for: slot)) {
+                        ToastCenter.shared.error(String(localized: "Could not save the watch image"))
+                    }
+                    await MainActor.run {
+                        pickerItem = nil
+                        picking = nil
+                    }
+                } catch {
+                    await MainActor.run {
+                        ToastCenter.shared.error(error.localizedDescription)
+                        pickerItem = nil
+                        picking = nil
+                    }
                 }
             }
         }
@@ -80,7 +97,7 @@ struct WatchSkinView: View {
                 .buttonStyle(.bordered)
             if skin.isUserProvided(slot) {
                 Button {
-                    skin.setUserImage(nil, for: slot)
+                    Task { _ = await skin.setUserImage(nil, for: slot) }
                 } label: {
                     Image(systemName: "trash")
                 }

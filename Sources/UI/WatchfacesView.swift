@@ -2,7 +2,7 @@ import SwiftUI
 
 struct WatchfacesView: View {
     @EnvironmentObject var watch: WatchManager
-    @State private var designs: [WatchfaceDesign] = WatchfaceStore.load()
+    @State private var designs: [WatchfaceDesign] = []
     @State private var editorDesign: WatchfaceDesign?
     @State private var busyText: String?
     @State private var installingDesignID: WatchfaceDesign.ID?
@@ -32,6 +32,10 @@ struct WatchfacesView: View {
                 if activeFaceHasCustomWidget { customWidgetSection }
             }
             .toolbar(.hidden, for: .navigationBar)
+            .task {
+                guard designs.isEmpty else { return }
+                designs = await WatchfaceStore.loadAsync()
+            }
             .onChange(of: customUpper) { _, value in
                 UserDefaults.standard.set(value, forKey: WatchScoped.key(.customWidgetUpper))
                 scheduleCustomTextPush()
@@ -51,7 +55,12 @@ struct WatchfacesView: View {
                     } else {
                         designs.append(updated)
                     }
-                    WatchfaceStore.save(designs)
+                    let snapshot = designs
+                    Task {
+                        if !(await WatchfaceStore.saveAsync(snapshot)) {
+                            ToastCenter.shared.error(String(localized: "Could not save watchface designs"))
+                        }
+                    }
                 }
             }
         }
@@ -122,7 +131,12 @@ struct WatchfacesView: View {
                 ForEach(designs) { design in
                     SwipeToDelete(onDelete: {
                         designs.removeAll { $0.id == design.id }
-                        WatchfaceStore.save(designs)
+                        let snapshot = designs
+                        Task {
+                            if !(await WatchfaceStore.saveAsync(snapshot)) {
+                                ToastCenter.shared.error(String(localized: "Could not save watchface designs"))
+                            }
+                        }
                     }) {
                         Button { editorDesign = design } label: {
                             HStack(spacing: 14) {
@@ -337,7 +351,9 @@ struct WatchfacesView: View {
         installingDesignID = design.id
         Task {
             do {
-                let wapp = try WappBuilder(design: design).build()
+                let wapp = try await Task.detached(priority: .utility) {
+                    try WappBuilder(design: design).build()
+                }.value
                 UIApplication.shared.isIdleTimerDisabled = true
                 defer { UIApplication.shared.isIdleTimerDisabled = false }
                 try await watch.installWatchface(wapp: wapp, name: design.sanitizedName)
@@ -389,7 +405,11 @@ struct WatchfaceThumbnail: View {
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(.secondary.opacity(0.4)))
         .task(id: design) {
-            image = WatchfacePreviewRenderer.render(design: design)
+            let rendered = await Task.detached(priority: .utility) {
+                autoreleasepool { WatchfacePreviewRenderer.render(design: design) }
+            }.value
+            guard !Task.isCancelled else { return }
+            image = rendered
         }
     }
 }

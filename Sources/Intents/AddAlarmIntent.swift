@@ -3,8 +3,8 @@ import AppIntents
 enum DayOfWeekOption: String, AppEnum, CaseIterable {
     case sunday, monday, tuesday, wednesday, thursday, friday, saturday
 
-    static var typeDisplayRepresentation: TypeDisplayRepresentation = "Day of Week"
-    static var caseDisplayRepresentations: [DayOfWeekOption: DisplayRepresentation] = [
+    static let typeDisplayRepresentation: TypeDisplayRepresentation = "Day of Week"
+    static let caseDisplayRepresentations: [DayOfWeekOption: DisplayRepresentation] = [
         .sunday: "Sunday", .monday: "Monday", .tuesday: "Tuesday", .wednesday: "Wednesday",
         .thursday: "Thursday", .friday: "Friday", .saturday: "Saturday",
     ]
@@ -27,9 +27,9 @@ enum DayOfWeekOption: String, AppEnum, CaseIterable {
 /// pushes the whole alarm list like a manual add would. Saves locally even
 /// when the watch is unreachable; the next connect/init/foreground pushes it.
 struct AddAlarmIntent: AppIntent {
-    static var title: LocalizedStringResource = "Add Watch Alarm"
-    static var description = IntentDescription("Adds an alarm to your Fossil watch.")
-    static var openAppWhenRun: Bool = false
+    static let title: LocalizedStringResource = "Add Watch Alarm"
+    static let description = IntentDescription("Adds an alarm to your Fossil watch.")
+    static let openAppWhenRun: Bool = false
 
     @Parameter(title: "Time")
     var time: Date
@@ -42,6 +42,9 @@ struct AddAlarmIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
+        guard let intendedWatchID = WatchRegistry.activeWatchIDSync() else {
+            return .result(dialog: "No watch is selected.")
+        }
         let components = Calendar.current.dateComponents([.hour, .minute], from: time)
         var mask: UInt8 = 0
         for day in days { mask |= 1 << day.bitIndex }
@@ -60,6 +63,9 @@ struct AddAlarmIntent: AppIntent {
             return .result(dialog: "Alarm saved — will apply once your watch reconnects.")
         }
         _ = await watch.waitUntilIdle(timeout: 5)
+        guard WatchRegistry.activeWatchIDSync() == intendedWatchID else {
+            return .result(dialog: "Alarm saved, but the selected watch changed before delivery.")
+        }
         do {
             try await watch.setAlarms(alarms)
             return .result(dialog: "Alarm added.")

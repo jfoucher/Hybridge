@@ -94,7 +94,7 @@ enum Theme {
     /// display serif, brass bar buttons, warm list backgrounds and green
     /// switches — so they belong to the same identity without a per-control
     /// rewrite. Called once at launch.
-    static func configureAppearance() {
+    @MainActor static func configureAppearance() {
         let ink = UIColor(ink)
         let serifLarge = UIFont(name: "InstrumentSerif-Regular", size: 34)
             ?? .systemFont(ofSize: 34, weight: .regular)

@@ -89,18 +89,40 @@ final class WatchSkinStore: ObservableObject {
 
     /// Save imported PNG data for a slot (nil clears the user import so the
     /// bundled default, if any, comes back).
-    func setUserImage(_ data: Data?, for slot: Slot) {
+    @discardableResult
+    func setUserImage(_ data: Data?, for slot: Slot) async -> Bool {
         let url = documentsURL(for: slot)
-        if let data {
-            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                     withIntermediateDirectories: true)
-            // Re-encode to PNG so we accept any picked image format.
-            let png = UIImage(data: data)?.pngData() ?? data
-            try? png.write(to: url)
-        } else {
-            try? FileManager.default.removeItem(at: url)
+        let succeeded = await Task.detached(priority: .utility) {
+            Self.persist(data, to: url)
+        }.value
+        if !succeeded {
+            NSLog("WatchSkinStore: update failed for \(slot.rawValue)")
         }
         reload()
+        return succeeded
+    }
+
+    nonisolated private static func persist(_ data: Data?, to url: URL) -> Bool {
+        do {
+            if let data {
+                guard data.count <= Int(BoundedPhotoTransfer.maximumCompressedBytes),
+                      UIImage(data: data) != nil else { return false }
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try data.write(to: url, options: [.atomic, .completeFileProtection])
+                guard try Data(contentsOf: url) == data else { return false }
+                var mutableURL = url
+                var values = URLResourceValues()
+                values.isExcludedFromBackup = true
+                try? mutableURL.setResourceValues(values)
+            } else if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+            return true
+        } catch {
+            NSLog("WatchSkinStore: persistence failed: \(error)")
+            return false
+        }
     }
 
     // MARK: - Loading

@@ -17,13 +17,13 @@ struct WatchNotificationIcon {
     /// [u16LE size][name][0x00][w][h][rle][0xFF 0xFF],
     /// size = nameLen + 3 + rleLen + 2.
     var block: Data {
-        let nameBytes = name.data(using: .utf8) ?? Data()
+        let nameBytes = name.utf8Prefix(maxBytes: 240)
         var data = Data()
         data.appendUInt16LE(UInt16(nameBytes.count + 3 + rleData.count + 2))
         data.append(nameBytes)
         data.append(0x00)
-        data.append(UInt8(width))
-        data.append(UInt8(height))
+        data.append(UInt8(clamping: min(max(width, 0), Self.maxSide)))
+        data.append(UInt8(clamping: min(max(height, 0), Self.maxSide)))
         data.append(rleData)
         data.append(contentsOf: [0xFF, 0xFF])
         return data
@@ -31,6 +31,32 @@ struct WatchNotificationIcon {
 
     static func file(_ icons: [WatchNotificationIcon]) -> Data {
         icons.reduce(into: Data()) { $0.append($1.block) }
+    }
+}
+
+enum ProtocolInputValidation {
+    static let maximumBundleIDBytes = 255
+    static let maximumDisplayNameCharacters = 80
+
+    static func normalizedBundleID(_ raw: String) -> String? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty, value.utf8.count <= maximumBundleIDBytes else { return nil }
+        let components = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count >= 2,
+              components.allSatisfy({ component in
+                  !component.isEmpty && component.utf8.count <= 63
+                    && component.utf8.allSatisfy {
+                        ($0 >= 48 && $0 <= 57) || ($0 >= 65 && $0 <= 90)
+                            || ($0 >= 97 && $0 <= 122) || $0 == 45
+                    }
+              }) else { return nil }
+        return value
+    }
+
+    static func displayName(_ raw: String, fallback: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return String((trimmed.isEmpty ? fallback : trimmed)
+            .prefix(maximumDisplayNameCharacters))
     }
 }
 
@@ -253,9 +279,14 @@ enum NotificationPlayFile {
     static func encode(kind: Kind, flags: UInt8, packageCrc: UInt32,
                        title: String, sender: String, message: String,
                        messageId: UInt32) -> Data {
-        let titleBytes = title.nullTerminatedUTF8()
-        let senderBytes = sender.nullTerminatedUTF8()
-        let messageBytes = message.nullTerminatedUTF8()
+        func bounded(_ value: String) -> Data {
+            var data = value.utf8Prefix(maxBytes: 254)
+            data.append(0)
+            return data
+        }
+        let titleBytes = bounded(title)
+        let senderBytes = bounded(sender)
+        let messageBytes = bounded(message)
 
         var data = Data()
         let total = 10 + 4 + 4 + titleBytes.count + senderBytes.count + messageBytes.count

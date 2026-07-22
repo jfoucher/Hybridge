@@ -6,7 +6,7 @@ import UserNotifications
 /// only updates when the app reads the config file — so this fires on sync
 /// (foreground or background refresh). The warned flag is kept per watch, so
 /// a roster of several watches alerts independently.
-final class BatteryWatcher {
+final class BatteryWatcher: @unchecked Sendable {
     static let shared = BatteryWatcher()
 
     private let enabledKey = "batteryAlertEnabled"

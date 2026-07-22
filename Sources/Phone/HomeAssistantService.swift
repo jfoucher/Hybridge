@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import Darwin
 
 extension Notification.Name {
     /// Posted whenever the optional Home Assistant integration is added,
@@ -56,17 +57,26 @@ struct HomeAssistantEntity: Identifiable, Equatable, Sendable {
         guard let states = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw HomeAssistantError.invalidResponse
         }
+        guard states.count <= 10_000 else { throw HomeAssistantError.invalidResponse }
         return states.compactMap(fromState)
     }
 
+    static func decodeState(_ data: Data) throws -> HomeAssistantEntity {
+        guard let state = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let entity = fromState(state) else {
+            throw HomeAssistantError.invalidResponse
+        }
+        return entity
+    }
+
     private static func fromState(_ object: [String: Any]) -> HomeAssistantEntity? {
-        guard let id = object["entity_id"] as? String,
-              let state = object["state"] as? String else { return nil }
+        guard let id = object["entity_id"] as? String, id.utf8.count <= 255,
+              let state = object["state"] as? String, state.utf8.count <= 1024 else { return nil }
         let attributes = object["attributes"] as? [String: Any] ?? [:]
         let domain = id.split(separator: ".", maxSplits: 1).first.map(String.init) ?? "entity"
         let fallbackName = id.split(separator: ".", maxSplits: 1).last
             .map { $0.replacingOccurrences(of: "_", with: " ").capitalized } ?? id
-        let name = attributes["friendly_name"] as? String ?? fallbackName
+        let name = String((attributes["friendly_name"] as? String ?? fallbackName).prefix(128))
 
         let rawBrightness = number(attributes["brightness"])
         let brightness = rawBrightness.map {
@@ -89,8 +99,12 @@ struct HomeAssistantEntity: Identifiable, Equatable, Sendable {
     }
 
     private static func number(_ value: Any?) -> Double? {
-        if let number = value as? NSNumber { return number.doubleValue }
-        if let string = value as? String { return Double(string) }
+        if let number = value as? NSNumber, number.doubleValue.isFinite {
+            return number.doubleValue
+        }
+        if let string = value as? String, let number = Double(string), number.isFinite {
+            return number
+        }
         return nil
     }
 }
@@ -250,7 +264,7 @@ enum HomeAssistantSettingsStore {
             throw HomeAssistantError.invalidAddress
         }
         guard scheme == "https"
-                || (allowsInsecureHTTP && isLocalNetworkHost(components.host ?? "")) else {
+                || (allowsInsecureHTTP && isPrivateAddressLiteral(components.host ?? "")) else {
             throw HomeAssistantError.insecureHTTPNotAllowed
         }
         components.scheme = scheme
@@ -263,16 +277,32 @@ enum HomeAssistantSettingsStore {
         return url
     }
 
-    private static func isLocalNetworkHost(_ host: String) -> Bool {
+    /// Insecure HTTP is deliberately limited to numeric private literals.
+    /// Accepting `.local`, dotless, or private-looking prefixes before DNS
+    /// resolution permits DNS rebinding and names such as 10.attacker.test.
+    static func isPrivateAddressLiteral(_ host: String) -> Bool {
         let value = host.lowercased()
-        if value == "localhost" || value == "::1" || !value.contains(".")
-            || value.hasSuffix(".local") || value.hasSuffix(".lan")
-            || value.hasSuffix(".home") || value.hasPrefix("127.")
-            || value.hasPrefix("10.") || value.hasPrefix("192.168.")
-            || value.hasPrefix("169.254.") || value.hasPrefix("fe80:")
-            || value.hasPrefix("fc") || value.hasPrefix("fd") { return true }
-        let octets = value.split(separator: ".").compactMap { Int($0) }
-        return octets.count == 4 && octets[0] == 172 && (16...31).contains(octets[1])
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        let octets = parts.compactMap { UInt8(String($0)) }
+        if parts.count == 4,
+           parts.allSatisfy({ !$0.isEmpty && $0.allSatisfy(\.isNumber) }),
+           octets.count == 4 {
+            return octets[0] == 10
+                || octets[0] == 127
+                || (octets[0] == 169 && octets[1] == 254)
+                || (octets[0] == 172 && (16...31).contains(octets[1]))
+                || (octets[0] == 192 && octets[1] == 168)
+        }
+
+        var address = in6_addr()
+        guard value.withCString({ inet_pton(AF_INET6, $0, &address) }) == 1 else {
+            return false
+        }
+        let bytes = withUnsafeBytes(of: &address) { Array($0) }
+        let loopback = bytes.dropLast().allSatisfy { $0 == 0 } && bytes.last == 1
+        let linkLocal = bytes[0] == 0xFE && (bytes[1] & 0xC0) == 0x80
+        let uniqueLocal = (bytes[0] & 0xFE) == 0xFC
+        return loopback || linkLocal || uniqueLocal
     }
 
     static func removeIntegration() {
@@ -296,15 +326,18 @@ enum HomeAssistantSettingsStore {
 /// UserDefaults, logs, or watch JSON.
 enum HomeAssistantCredentialStore {
     private static let service = "eu.sixpixels.hybridge.homeassistant"
-    private static let account = "long-lived-access-token"
+    private static let account = "long-lived-access-token.v2.device-only"
+    private static let legacyAccount = "long-lived-access-token"
 
-    private static var query: [String: Any] {
+    private static func query(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
         ]
     }
+
+    private static var query: [String: Any] { query(account: account) }
 
     @discardableResult
     static func saveToken(_ token: String) -> Bool {
@@ -330,7 +363,7 @@ enum HomeAssistantCredentialStore {
 
         var item = query
         item[kSecValueData as String] = data
-        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         let addStatus = SecItemAdd(item as CFDictionary, nil)
         HomeAssistantLog.print(addStatus == errSecSuccess
             ? "Keychain token created (length=\(data.count))"
@@ -339,7 +372,19 @@ enum HomeAssistantCredentialStore {
     }
 
     static func loadToken() -> String? {
-        var item = query
+        if let current = load(account: account) { return current }
+        guard let legacy = load(account: legacyAccount) else { return nil }
+        // Add + read-back + compare before deleting the working legacy item.
+        guard saveToken(legacy), load(account: account) == legacy else {
+            HomeAssistantLog.print("Keychain token migration deferred; legacy item retained")
+            return legacy
+        }
+        SecItemDelete(query(account: legacyAccount) as CFDictionary)
+        return legacy
+    }
+
+    private static func load(account: String) -> String? {
+        var item = query(account: account)
         item[kSecReturnData as String] = true
         item[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
@@ -356,10 +401,13 @@ enum HomeAssistantCredentialStore {
     }
 
     static func deleteToken() {
-        let status = SecItemDelete(query as CFDictionary)
-        HomeAssistantLog.print(status == errSecSuccess || status == errSecItemNotFound
-            ? "Keychain token deleted"
-            : "Keychain token delete failed (OSStatus=\(status))")
+        let statuses = [account, legacyAccount].map {
+            SecItemDelete(query(account: $0) as CFDictionary)
+        }
+        let succeeded = statuses.allSatisfy { $0 == errSecSuccess || $0 == errSecItemNotFound }
+        HomeAssistantLog.print(succeeded
+            ? "Keychain token versions deleted"
+            : "Keychain token delete failed")
     }
 }
 
@@ -410,12 +458,53 @@ enum HomeAssistantControl: Equatable, Sendable {
 /// REST client for Home Assistant's /api/states and /api/services endpoints.
 /// URLSession is thread-safe; @unchecked is only needed because Foundation's
 /// declaration was not Sendable on the oldest iOS 17 SDK supported here.
+final class HomeAssistantRedirectDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static func permitsRedirect(from original: URL, to destination: URL) -> Bool {
+        original.scheme?.lowercased() == "https"
+            && destination.scheme?.lowercased() == "https"
+            && original.host?.lowercased() == destination.host?.lowercased()
+            && original.port == destination.port
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let original = task.originalRequest?.url,
+              let destination = request.url,
+              Self.permitsRedirect(from: original, to: destination) else {
+            completionHandler(nil)
+            return
+        }
+        // URLSession may copy Authorization to a redirected request. Rebuild
+        // it only for the exact same HTTPS origin.
+        completionHandler(request)
+    }
+}
+
 final class HomeAssistantAPI: @unchecked Sendable {
     static let shared = HomeAssistantAPI()
+    static let maximumResponseBytes = 512 * 1024
     private let session: URLSession
+    private let redirectDelegate: HomeAssistantRedirectDelegate?
 
-    init(session: URLSession = .shared) {
-        self.session = session
+    init(session: URLSession? = nil) {
+        if let session {
+            self.session = session
+            redirectDelegate = nil
+        } else {
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.urlCache = nil
+            configuration.httpCookieStorage = nil
+            configuration.httpShouldSetCookies = false
+            configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+            configuration.timeoutIntervalForRequest = 5
+            configuration.timeoutIntervalForResource = 10
+            let delegate = HomeAssistantRedirectDelegate()
+            redirectDelegate = delegate
+            self.session = URLSession(configuration: configuration,
+                                      delegate: delegate, delegateQueue: nil)
+        }
     }
 
     func fetchAll(configuration: HomeAssistantConfiguration) async throws -> [HomeAssistantEntity] {
@@ -432,9 +521,21 @@ final class HomeAssistantAPI: @unchecked Sendable {
         guard !configuration.selectedEntityIDs.isEmpty else {
             throw HomeAssistantError.noSelectedEntities
         }
-        let all = try await fetchAll(configuration: configuration)
-        let byID = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
-        let selected = configuration.selectedEntityIDs.compactMap { byID[$0] }
+        var selected: [HomeAssistantEntity] = []
+        selected.reserveCapacity(configuration.selectedEntityIDs.count)
+        for entityID in configuration.selectedEntityIDs {
+            try Task.checkCancellation()
+            let url = configuration.baseURL
+                .appendingPathComponent("api")
+                .appendingPathComponent("states")
+                .appendingPathComponent(entityID)
+            do {
+                selected.append(try HomeAssistantEntity.decodeState(
+                    await perform(url: url, token: configuration.token)))
+            } catch HomeAssistantError.serverStatus(404) {
+                continue
+            }
+        }
         guard !selected.isEmpty else { throw HomeAssistantError.selectedEntitiesUnavailable }
         return selected
     }
@@ -495,7 +596,21 @@ final class HomeAssistantAPI: @unchecked Sendable {
         let data: Data
         let response: URLResponse
         do {
-            (data, response) = try await session.data(for: request)
+            let (bytes, initialResponse) = try await session.bytes(for: request)
+            response = initialResponse
+            var bounded = Data()
+            if initialResponse.expectedContentLength > Self.maximumResponseBytes {
+                throw HomeAssistantError.invalidResponse
+            }
+            bounded.reserveCapacity(max(0, min(Int(initialResponse.expectedContentLength),
+                                               Self.maximumResponseBytes)))
+            for try await byte in bytes {
+                guard bounded.count < Self.maximumResponseBytes else {
+                    throw HomeAssistantError.invalidResponse
+                }
+                bounded.append(byte)
+            }
+            data = bounded
         } catch {
             HomeAssistantLog.print("HTTP \(method) failed before a response: \(error.localizedDescription)")
             throw error
@@ -509,6 +624,10 @@ final class HomeAssistantAPI: @unchecked Sendable {
         guard 200..<300 ~= http.statusCode else {
             throw HomeAssistantError.serverStatus(http.statusCode)
         }
+        guard let contentType = http.value(forHTTPHeaderField: "Content-Type")?.lowercased(),
+              contentType.contains("application/json") || contentType.contains("+json") else {
+            throw HomeAssistantError.invalidResponse
+        }
         return data
     }
 }
@@ -518,6 +637,7 @@ final class HomeAssistantAPI: @unchecked Sendable {
 /// push goes through WatchManager's serialized request/session path.
 enum HomeAssistantBridge {
     static func handle(_ request: [String: Any], requestID: Int,
+                       connection: WatchConnectionToken,
                        api: HomeAssistantAPI = .shared) async {
         guard let tokenNumber = request["token"] as? NSNumber else {
             HomeAssistantLog.print("Ignoring malformed watch request id=\(requestID): token missing")
@@ -551,7 +671,8 @@ enum HomeAssistantBridge {
                 id: requestID, token: token, status: "ok", entities: entities)
             logResponse(response, requestID: requestID, status: "ok",
                         entityCount: entities.count)
-            let sent = await WatchManager.shared.pushJsonWhenIdle(response)
+            let sent = await WatchManager.shared.pushJsonWhenIdle(
+                response, expectedToken: connection)
             HomeAssistantLog.print(sent
                 ? "BLE watch response sent: transportID=\(requestID), status=ok"
                 : "BLE watch response FAILED after retries: transportID=\(requestID), status=ok")
@@ -564,7 +685,8 @@ enum HomeAssistantBridge {
             let response = JsonPayloads.homeAssistantResponse(
                 id: requestID, token: token, status: "error", message: message)
             logResponse(response, requestID: requestID, status: "error", entityCount: 0)
-            let sent = await WatchManager.shared.pushJsonWhenIdle(response)
+            let sent = await WatchManager.shared.pushJsonWhenIdle(
+                response, expectedToken: connection)
             HomeAssistantLog.print(sent
                 ? "BLE watch response sent: transportID=\(requestID), status=error"
                 : "BLE watch response FAILED after retries: transportID=\(requestID), status=error")

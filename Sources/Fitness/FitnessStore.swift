@@ -3,6 +3,21 @@ import Foundation
 import UIKit
 #endif
 
+private actor FitnessMergeGate {
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func release() {
+        if waiters.isEmpty { busy = false }
+        else { waiters.removeFirst().resume() }
+    }
+}
+
 /// Local persistence for synced fitness data (JSON in Documents), with the
 /// aggregations the charts need. One combined dataset across all watches:
 /// every record is tagged with its source watch, and samples are
@@ -11,7 +26,12 @@ import UIKit
 // Published state is mutated on main and archive I/O state on the serial
 // `ioQueue`; closures crossing to that queue never access the published arrays.
 final class FitnessStore: ObservableObject, @unchecked Sendable {
-    static let shared = FitnessStore()
+    static let shared = FitnessStore(loadAsynchronously: true)
+
+    enum LoadState: Equatable {
+        case notLoaded, loading, loaded, blocked, failed
+    }
+    @Published private(set) var loadState: LoadState = .notLoaded
 
     @Published private(set) var samples: [ActivitySample] = []
     @Published private(set) var spo2Samples: [SpO2Sample] = []
@@ -57,11 +77,13 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
     /// Retained so it can be removed in `deinit`; fires the blocked-load retry
     /// when the device unlocks.
     private var protectedDataObserver: NSObjectProtocol?
+    private var initialLoadTask: Task<Void, Never>?
 
     /// Serial queue for the JSON encode + disk write, so that work never runs
     /// on the main thread (a full-history archive is ~15–25 MB at the retention
     /// steady state, and the sync hot path hit it every few minutes).
     private let ioQueue = DispatchQueue(label: "eu.sixpixels.hybridge.fitness-io", qos: .utility)
+    private let mergeGate = FitnessMergeGate()
 
     private struct Archive: Codable, Sendable {
         /// Bumped when a field stops being decodable by older builds. Absent
@@ -80,13 +102,98 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
     /// one-time adoption.
     private var legacyLastSync: Date?
 
-    init(fileURL: URL? = nil) {
+    init(fileURL: URL? = nil, loadAsynchronously: Bool = false) {
         self.fileURL = fileURL
             ?? FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
                 .appendingPathComponent("fitness.json")
-        load()
-        adoptLegacyDataIfNeeded()
+        if loadAsynchronously {
+            loadBlocked = true
+            loadState = .loading
+            startAsynchronousLoad()
+        } else {
+            load()
+            loadState = loadBlocked ? .blocked : (loadFailed ? .failed : .loaded)
+            adoptLegacyDataIfNeeded()
+        }
         observeProtectedDataAvailability()
+    }
+
+    private struct LoadOutcome: Sendable {
+        var archive: Archive?
+        var blocked = false
+        var failed = false
+        var quarantinedURL: URL?
+    }
+
+    private static func readArchive(at url: URL) -> LoadOutcome {
+        let manager = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard manager.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            return LoadOutcome(archive: nil)
+        }
+        // A directory (and any other non-file object) at the archive path is
+        // present but unreadable data, not a first-run/missing archive. Keep
+        // writes blocked so it cannot be replaced with an empty history.
+        guard !isDirectory.boolValue else {
+            return LoadOutcome(archive: nil, blocked: true)
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            return LoadOutcome(archive: nil,
+                               blocked: manager.fileExists(atPath: url.path),
+                               failed: false, quarantinedURL: nil)
+        }
+        do {
+            var archive = try JSONDecoder().decode(Archive.self, from: data)
+            if !archive.samples.isSorted(by: \.timestamp) {
+                archive.samples.sort { $0.timestamp < $1.timestamp }
+            }
+            if !archive.spo2.isSorted(by: \.timestamp) {
+                archive.spo2.sort { $0.timestamp < $1.timestamp }
+            }
+            return LoadOutcome(archive: archive)
+        } catch {
+            let stamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            let target = url.deletingLastPathComponent()
+                .appendingPathComponent("fitness.corrupt-\(stamp).json")
+            do {
+                try manager.moveItem(at: url, to: target)
+                return LoadOutcome(archive: nil, blocked: false,
+                                   failed: false, quarantinedURL: target)
+            } catch {
+                return LoadOutcome(archive: nil, blocked: false,
+                                   failed: true, quarantinedURL: url)
+            }
+        }
+    }
+
+    private func startAsynchronousLoad() {
+        let url = fileURL
+        initialLoadTask = Task { [weak self] in
+            let outcome = await Task.detached(priority: .utility) {
+                Self.readArchive(at: url)
+            }.value
+            guard let self else { return }
+            await MainActor.run {
+                if let archive = outcome.archive {
+                    self.samples = archive.samples
+                    self.spo2Samples = archive.spo2
+                    self.workouts = archive.workouts
+                    self.lastSyncByWatch = archive.lastSyncByWatch ?? [:]
+                    self.legacyLastSync = archive.lastSync
+                }
+                self.loadBlocked = outcome.blocked
+                self.loadFailed = outcome.failed
+                self.quarantinedArchiveURL = outcome.quarantinedURL
+                self.loadState = outcome.blocked ? .blocked
+                    : (outcome.failed ? .failed : .loaded)
+                self.daySummaryCache = [:]
+                self.adoptLegacyDataIfNeeded()
+            }
+        }
     }
 
     deinit {
@@ -104,7 +211,7 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
             forName: UIApplication.protectedDataDidBecomeAvailableNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            self?.retryLoadIfBlocked()
+            Task { await self?.retryLoadIfBlocked() }
         }
         #endif
     }
@@ -112,9 +219,11 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
     /// Re-attempt a load that data protection blocked. If the archive is now
     /// readable the history returns and persistence unblocks; if it still isn't,
     /// `load()` re-latches `loadBlocked`. Safe to call repeatedly.
-    func retryLoadIfBlocked() {
+    func retryLoadIfBlocked() async {
         guard loadBlocked else { return }
-        load()
+        loadState = .loading
+        startAsynchronousLoad()
+        await initialLoadTask?.value
     }
 
     /// Loads the archive. A *missing* file is the normal first-run case and
@@ -125,6 +234,12 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
     /// store latches into `loadFailed`, which blocks writes.
     private func load() {
         loadBlocked = false
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: fileURL.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            loadBlocked = true
+            return
+        }
         let data: Data
         do {
             data = try Data(contentsOf: fileURL)
@@ -387,6 +502,8 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
     }
 
     func setLastSync(_ date: Date, for watchID: UUID?) async {
+        if let initialLoadTask { await initialLoadTask.value }
+        guard !loadBlocked, !loadFailed else { return }
         await MainActor.run { self.lastSyncByWatch[Self.syncKey(watchID)] = date }
         _ = await persist()
     }
@@ -408,11 +525,99 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
                spo2 newSpo2: [SpO2Sample],
                workouts newWorkouts: [WorkoutSummary],
                from watchID: UUID? = nil) async -> (count: Int, persisted: Bool) {
-        let count = await MainActor.run {
-            self.applyMerge(samples: newSamples, spo2: newSpo2, workouts: newWorkouts, from: watchID)
+        if let initialLoadTask { await initialLoadTask.value }
+        guard !loadBlocked, !loadFailed else {
+            await MainActor.run { self.lastSaveFailed = true }
+            return (0, false)
+        }
+        await mergeGate.acquire()
+        let existing = await MainActor.run {
+            (self.samples, self.spo2Samples, self.workouts, self.lastSyncByWatch)
+        }
+        let result = await Task.detached(priority: .utility) {
+            Self.computeMerge(existingSamples: existing.0, existingSpo2: existing.1,
+                              existingWorkouts: existing.2,
+                              incomingSamples: newSamples, incomingSpo2: newSpo2,
+                              incomingWorkouts: newWorkouts, watchID: watchID)
+        }.value
+        await MainActor.run {
+            self.samples = result.samples
+            self.spo2Samples = result.spo2
+            self.workouts = result.workouts
+            self.lastSyncByWatch[Self.syncKey(watchID)] = Date()
+            self.daySummaryCache = [:]
         }
         let persisted = await persist()
-        return (count, persisted)
+        await mergeGate.release()
+        return (result.freshCount, persisted)
+    }
+
+    private struct MergeResult: Sendable {
+        var samples: [ActivitySample]
+        var spo2: [SpO2Sample]
+        var workouts: [WorkoutSummary]
+        var freshCount: Int
+    }
+
+    private static func computeMerge(
+        existingSamples: [ActivitySample], existingSpo2: [SpO2Sample],
+        existingWorkouts: [WorkoutSummary], incomingSamples: [ActivitySample],
+        incomingSpo2: [SpO2Sample], incomingWorkouts: [WorkoutSummary],
+        watchID: UUID?
+    ) -> MergeResult {
+        var samplesToAdd = incomingSamples
+        for index in samplesToAdd.indices { samplesToAdd[index].watchID = watchID }
+        let knownSamples = Set(existingSamples.lazy
+            .filter { $0.watchID == watchID }.map(\.timestamp))
+        var seenSamples = Set<Int>()
+        samplesToAdd = samplesToAdd
+            .filter { !knownSamples.contains($0.timestamp) && seenSamples.insert($0.timestamp).inserted }
+            .sorted { $0.timestamp < $1.timestamp }
+
+        var spo2ToAdd = incomingSpo2
+        for index in spo2ToAdd.indices { spo2ToAdd[index].watchID = watchID }
+        let knownSpo2 = Set(existingSpo2.lazy
+            .filter { $0.watchID == watchID }.map(\.timestamp))
+        var seenSpo2 = Set<Int>()
+        spo2ToAdd = spo2ToAdd
+            .filter { !knownSpo2.contains($0.timestamp) && seenSpo2.insert($0.timestamp).inserted }
+            .sorted { $0.timestamp < $1.timestamp }
+
+        func merged<T>(_ lhs: [T], _ rhs: [T], by key: (T) -> Int) -> [T] {
+            var output: [T] = []
+            output.reserveCapacity(lhs.count + rhs.count)
+            var left = 0, right = 0
+            while left < lhs.count && right < rhs.count {
+                if key(lhs[left]) <= key(rhs[right]) {
+                    output.append(lhs[left]); left += 1
+                } else {
+                    output.append(rhs[right]); right += 1
+                }
+            }
+            output.append(contentsOf: lhs[left...])
+            output.append(contentsOf: rhs[right...])
+            return output
+        }
+
+        let cutoff = Int(Date().timeIntervalSince1970) - retentionDays * 86400
+        let allSamples = merged(existingSamples, samplesToAdd, by: \.timestamp)
+            .drop(while: { $0.timestamp < cutoff })
+        let allSpo2 = merged(existingSpo2, spo2ToAdd, by: \.timestamp)
+            .drop(while: { $0.timestamp < cutoff })
+
+        var workoutsToAdd = incomingWorkouts
+        for index in workoutsToAdd.indices { workoutsToAdd[index].watchID = watchID }
+        func workoutKey(_ workout: WorkoutSummary) -> String {
+            "\(workout.startTimestamp)-\(workout.endTimestamp)-\(workout.watchID?.uuidString ?? legacySyncKey)"
+        }
+        let knownWorkouts = Set(existingWorkouts.map(workoutKey))
+        workoutsToAdd.removeAll { knownWorkouts.contains(workoutKey($0)) }
+        let allWorkouts = merged(existingWorkouts, workoutsToAdd.sorted {
+            $0.startTimestamp < $1.startTimestamp
+        }, by: \.startTimestamp)
+
+        return MergeResult(samples: Array(allSamples), spo2: Array(allSpo2),
+                           workouts: allWorkouts, freshCount: samplesToAdd.count)
     }
 
     /// The in-memory mutation, split out so `merge` can run it on the main
@@ -573,6 +778,16 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
         liveStepCountsByWatch.values.contains {
             calendar.isDate($0.observedAt, inSameDayAs: day)
         }
+    }
+
+    /// Actual observation time behind the current step display. This never
+    /// advances because an unrelated setting or widget flush occurred.
+    var latestStepObservationDate: Date? {
+        let live = liveStepCountsByWatch.values.map(\.observedAt).max()
+        let synced = samples.last.map {
+            Date(timeIntervalSince1970: TimeInterval($0.timestamp))
+        }
+        return [live, synced].compactMap { $0 }.max()
     }
 
     func calories(onDay day: Date) -> Int {

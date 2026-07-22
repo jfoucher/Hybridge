@@ -27,7 +27,7 @@ class FossilRequest {
 
     /// Initial payload written when the request starts.
     func startData() throws -> Data {
-        fatalError("startData not implemented")
+        throw FossilError.unexpectedResponse("\(name) has no start payload")
     }
 
     /// Process a notification. Throw to abort the request.

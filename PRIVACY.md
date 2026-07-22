@@ -41,8 +41,10 @@ settings, but intentionally keeps already-synced fitness history. The Fitness
 screen provides a separate **Delete local fitness history** action. Removing
 the Home Assistant integration deletes its saved address, selected entities and
 Keychain token. Deleting the app removes its sandbox files and settings; iOS may
-retain Keychain items across reinstall or encrypted-device-backup restoration,
-so remove watches and the Home Assistant integration first if those credentials
+retain Keychain items across reinstall, and watch authentication keys may also
+migrate in an encrypted device backup. The Home Assistant token is marked
+device-only and does not migrate to another device through backup restoration.
+Remove watches and the Home Assistant integration first if those credentials
 must also be erased. Data already exported to Apple Health is managed in Health.
 Copies already written to a watch remain on that watch until replaced or reset.
 
@@ -104,16 +106,15 @@ app communicates directly with the server address and credentials **you**
 provide. That data goes only to the server you configure, not to the developer.
 This feature is off unless you set it up.
 HTTPS is required by default. The settings screen offers an explicit advanced
-override for local HTTP servers; enabling it means the long-lived token and
-Home Assistant responses can be observed or modified by someone with access to
-that network.
+override for local HTTP servers addressed by a numeric private or link-local IP
+literal; hostnames and public addresses are rejected for insecure HTTP. Enabling
+the override means the long-lived token and Home Assistant responses can be
+observed or modified by someone with access to that network.
 
-## Calendar and commute routing
+## Calendar
 
 If calendar sync is enabled, upcoming event titles, times and notes are read
-from EventKit and written directly to the watch. If commute ETA is used, the
-destination and current location are processed by Apple's MapKit routing
-service. Neither is sent to the developer.
+from EventKit and written directly to the watch. It is not sent to the developer.
 
 ## Data the developer receives
 

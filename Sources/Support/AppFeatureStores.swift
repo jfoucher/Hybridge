@@ -6,7 +6,7 @@ import Foundation
 /// and default; this is that shape, once. The key is resolved on each access
 /// rather than captured, so switching the active watch changes what the store
 /// reads without anything having to be reloaded.
-struct WatchScopedValue<Value: Codable> {
+struct WatchScopedValue<Value: Codable>: @unchecked Sendable {
     let key: WatchScopedKey
     let defaultValue: Value
     private let defaults: UserDefaults
@@ -45,7 +45,7 @@ struct WatchScopedValue<Value: Codable> {
 /// A Codable preference shared by every watch. Watch-family-specific values
 /// still use separate keys, but never the active watch's UUID, so the next
 /// compatible watch receives the same configuration during initialization.
-struct GlobalSettingsValue<Value: Codable> {
+struct GlobalSettingsValue<Value: Codable>: @unchecked Sendable {
     let key: String
     let defaultValue: Value
     private let defaults: UserDefaults

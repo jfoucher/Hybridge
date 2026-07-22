@@ -115,7 +115,7 @@ struct FileManagerView: View {
         busy = true
         Task {
             do {
-                try await watch.run(FileDeleteRequest(handle: handle.rawValue))
+                try await watch.deleteFileForDebug(handle: handle.rawValue)
                 await MainActor.run {
                     busy = false
                     ToastCenter.shared.success(

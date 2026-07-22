@@ -58,9 +58,9 @@ enum WatchKind: String, Codable {
     var hasApps: Bool { hasDisplay }
     var hasJsonPush: Bool { hasDisplay }
     var hasTranslations: Bool { hasDisplay }
-    var hasWeather: Bool { hasDisplay && HardwareValidation.watchWeather }
+    var hasWeather: Bool { hasDisplay }
     var hasCalendar: Bool { hasDisplay }
-    var hasQuietHours: Bool { self != .fossilQ || HardwareValidation.qQuietHours }
+    var hasQuietHours: Bool { true }
 
     var hasHeartRate: Bool { hasDisplay }
     var hasWorkouts: Bool { hasDisplay }

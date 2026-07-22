@@ -112,7 +112,7 @@ final class FitnessStoreDurabilityTests: XCTestCase {
         try JSONEncoder().encode(Archive(samples: [sample(ts)], spo2: [], workouts: []))
             .write(to: fileURL)
 
-        store.retryLoadIfBlocked()
+        await store.retryLoadIfBlocked()
         XCTAssertFalse(store.loadBlocked)
         XCTAssertEqual(store.samples.count, 1, "history must return once the archive is readable")
 
@@ -162,12 +162,16 @@ final class FitnessStoreDurabilityTests: XCTestCase {
         let store = FitnessStore(fileURL: fileURL)
         let base = Int(Date().timeIntervalSince1970) - 3600
         let count = 60
+        let watchID = watch
 
         await withTaskGroup(of: Void.self) { group in
             for offset in 0..<count {
                 group.addTask {
-                    await store.merge(samples: [self.sample(base + offset)],
-                                      spo2: [], workouts: [], from: self.watch)
+                    let sample = ActivitySample(
+                        timestamp: base + offset, stepCount: 10, calories: 2,
+                        heartRate: 70, variability: 10, maxVariability: 20,
+                        heartRateQuality: 3, isActive: false, wearingState: 0)
+                    await store.merge(samples: [sample], spo2: [], workouts: [], from: watchID)
                 }
             }
         }

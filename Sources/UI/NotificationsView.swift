@@ -74,6 +74,9 @@ struct NotificationsView: View {
         }
         .sheet(isPresented: $adding) {
             AddNotificationAppView { entry in
+                store.entries.removeAll {
+                    $0.bundleId.caseInsensitiveCompare(entry.bundleId) == .orderedSame
+                }
                 store.entries.append(entry)
             }
         }
@@ -259,13 +262,18 @@ private struct AddNotificationAppView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Add") {
+                        guard let normalized = ProtocolInputValidation.normalizedBundleID(bundleId) else {
+                            ToastCenter.shared.error(String(localized: "Enter a valid bundle ID"))
+                            return
+                        }
                         onAdd(NotificationIconStore.Entry(
-                            bundleId: bundleId.trimmingCharacters(in: .whitespaces),
-                            displayName: displayName.isEmpty ? bundleId : displayName,
+                            bundleId: normalized,
+                            displayName: ProtocolInputValidation.displayName(
+                                displayName, fallback: normalized),
                             symbol: UIImage(systemName: symbol) != nil ? symbol : "app.badge.fill"))
                         dismiss()
                     }
-                    .disabled(bundleId.trimmingCharacters(in: .whitespaces).isEmpty)
+                    .disabled(ProtocolInputValidation.normalizedBundleID(bundleId) == nil)
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

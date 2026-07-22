@@ -60,7 +60,6 @@ struct ContentView: View {
         // Clamp Dynamic Type: the brass system's fixed-height pills, tiles
         // and alarm cards weren't designed for the largest accessibility
         // sizes and would clip/overlap past this ceiling.
-        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
         .toastOverlay()
         .sheet(isPresented: $showOnboarding) {
             OnboardingView()

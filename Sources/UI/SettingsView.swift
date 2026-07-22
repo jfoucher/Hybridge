@@ -91,7 +91,10 @@ struct SettingsView: View {
                            destination: { BodyMetricsView() })
                 }
             }
-            .onChange(of: stepGoal) { _, value in pushStepGoalDebounced(value) }
+            .onChange(of: stepGoal) { _, value in
+                NotificationCenter.default.post(name: .widgetRelevantSettingChanged, object: nil)
+                pushStepGoalDebounced(value)
+            }
             Footer("These preferences apply to every compatible watch when it connects. Body metrics let supported watches estimate calories.")
         }
         .id(refreshToken)   // recompute the summary after editing

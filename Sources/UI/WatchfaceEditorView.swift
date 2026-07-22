@@ -16,6 +16,7 @@ enum EditorLayout {
     }
 }
 
+@MainActor
 struct WatchfaceEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -34,6 +35,10 @@ struct WatchfaceEditorView: View {
     @State private var lastOffset: CGSize = .zero
     
     @State private var sourceImage: UIImage?
+    @State private var sourcePNG: Data?
+    @State private var previewRenderTask: Task<Void, Never>?
+    @State private var backgroundRenderTask: Task<Void, Never>?
+    @State private var backgroundRenderGeneration: UUID?
     /// Quantized, contrast-adjusted rendition of `sourceImage` shown live in
     /// the face preview (rebuilt when the photo or the contrast changes).
     @State private var adjustedPreview: UIImage?
@@ -87,6 +92,10 @@ struct WatchfaceEditorView: View {
         }
         .background(Theme.bg.ignoresSafeArea())
         .tint(Theme.accent)
+        .onDisappear {
+            previewRenderTask?.cancel()
+            backgroundRenderTask?.cancel()
+        }
     }
 
     // MARK: Dark studio (top half)
@@ -114,6 +123,7 @@ struct WatchfaceEditorView: View {
                 Button("Save") { onSave(design); dismiss() }
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color(hex: 0xD8A94B))
+                    .disabled(backgroundRenderGeneration != nil)
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 18)
@@ -153,12 +163,14 @@ struct WatchfaceEditorView: View {
     // MARK: Photo tool
 
     private var photoTool: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        let pickerTitle = sourceImage == nil
+            ? String(localized: "Choose background photo")
+            : String(localized: "Change background photo")
+        return VStack(alignment: .leading, spacing: 12) {
             PhotosPicker(selection: $photoItem, matching: .images) {
                 HStack(spacing: 8) {
                     Image(systemName: "photo")
-                    Text(sourceImage == nil ? String(localized: "Choose background photo")
-                                            : String(localized: "Change background photo"))
+                    Text(pickerTitle)
                 }
                 .font(.system(size: 15, weight: .semibold))
                 .foregroundStyle(Theme.accent)
@@ -362,6 +374,7 @@ struct WatchfaceEditorView: View {
             if sourceImage == nil, design.backgroundColorHex == nil,
                let png = design.backgroundPNG,
                let image = UIImage(data: png) {
+                sourcePNG = png
                 sourceImage = image
                 rebuildAdjustedPreview()
             }
@@ -370,9 +383,22 @@ struct WatchfaceEditorView: View {
 
     /// Rebuild the quantized, contrast-adjusted preview shown on the face.
     private func rebuildAdjustedPreview() {
-        guard let sourceImage else { adjustedPreview = nil; return }
-        let adjusted = ImageEncoder.applyContrast(sourceImage, contrast: contrast)
-        adjustedPreview = ImageEncoder.quantizedPreview(from: adjusted)
+        previewRenderTask?.cancel()
+        guard let sourcePNG else { adjustedPreview = nil; return }
+        let contrast = contrast
+        previewRenderTask = Task {
+            do {
+                let png = try await BoundedImageProcessor.preview(
+                    sourcePNG: sourcePNG, contrast: contrast)
+                try Task.checkCancellation()
+                guard self.sourcePNG == sourcePNG, self.contrast == contrast else { return }
+                adjustedPreview = UIImage(data: png)
+            } catch is CancellationError {
+                return
+            } catch {
+                ToastCenter.shared.error(error.localizedDescription)
+            }
+        }
     }
 
     /// Snap a proposed face-coordinate centre (0…240) to the face centre and
@@ -419,54 +445,6 @@ struct WatchfaceEditorView: View {
         .tint(Theme.accent)
     }
 
-    private func renderTransformedImage(
-        from image: UIImage,
-        scale: CGFloat,
-        offset: CGSize,
-        previewSize: CGFloat,
-        targetSide: CGFloat = 480
-    ) -> UIImage {
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: targetSide, height: targetSide), format: format)
-        
-        // 1. Calculate the ratio between the UI preview size and the 480px target
-        let ratio = targetSide / previewSize
-        
-        return renderer.image { context in
-            let cgContext = context.cgContext
-            
-            // 2. Translate center to the middle of the canvas, adding the scaled UI offset
-            cgContext.translateBy(
-                x: (targetSide / 2) + (offset.width * ratio),
-                y: (targetSide / 2) + (offset.height * ratio)
-            )
-            
-            // 3. Apply the zoom scale
-            cgContext.scaleBy(x: scale, y: scale)
-            
-            // 4. Calculate aspect-fill dimensions (equivalent to SwiftUI's .scaledToFill())
-            let imageAspect = image.size.width / image.size.height
-            var drawWidth = targetSide
-            var drawHeight = targetSide
-            
-            if imageAspect > 1 {
-                drawWidth = targetSide * imageAspect
-            } else {
-                drawHeight = targetSide / imageAspect
-            }
-            
-            // 5. Draw the image centered around the origin (0,0)
-            let drawRect = CGRect(
-                x: -drawWidth / 2,
-                y: -drawHeight / 2,
-                width: drawWidth,
-                height: drawHeight
-            )
-            image.draw(in: drawRect)
-        }
-    }
-    
     // Adjust image
     private func imageAdjustmentGestures(previewSize: CGFloat) -> some Gesture {
         SimultaneousGesture(
@@ -773,10 +751,12 @@ struct WatchfaceEditorView: View {
     private func loadPhoto(_ item: PhotosPickerItem?) {
         guard let item else { return }
         Task {
-            if let data = try? await item.loadTransferable(type: Data.self),
-               
-               let rawImage = UIImage(data: data) {
-                
+            do {
+                guard let transfer = try await item.loadTransferable(
+                    type: BoundedPhotoTransfer.self),
+                      let rawImage = UIImage(data: transfer.pngData) else {
+                    throw BoundedImageImportError.invalidImage
+                }
                 let image = rawImage.fixingOrientation()
                 
                 await MainActor.run {
@@ -787,33 +767,49 @@ struct WatchfaceEditorView: View {
                     lastOffset = .zero
                     
                     // Store the raw image for editing gestures
+                    self.sourcePNG = transfer.pngData
                     self.sourceImage = image
                     rebuildAdjustedPreview()
 
                     // Immediately generate an initial centered 480x480 crop
                     updateBackgroundPNG()
                 }
+            } catch {
+                await MainActor.run { ToastCenter.shared.error(error.localizedDescription) }
             }
         }
     }
     
     private func updateBackgroundPNG(previewSize: CGFloat? = nil) {
-        guard let sourceImage else { return }
-
+        backgroundRenderTask?.cancel()
+        guard let sourcePNG else { return }
+        let generation = UUID()
+        backgroundRenderGeneration = generation
         let side = previewSize ?? previewSide
-
-        let adjusted = ImageEncoder.applyContrast(sourceImage, contrast: contrast)
-        let finalImage = renderTransformedImage(
-            from: adjusted,
-            scale: scale,
-            offset: displayOffset(for: side),
-            previewSize: side,
-            targetSide: 480
-        )
-
-        design.contrast = contrast
-        design.backgroundColorHex = nil
-        design.backgroundPNG = finalImage.pngData()
+        let contrast = contrast
+        let scale = scale
+        let renderedOffset = displayOffset(for: side)
+        backgroundRenderTask = Task {
+            defer {
+                if backgroundRenderGeneration == generation {
+                    backgroundRenderGeneration = nil
+                }
+            }
+            do {
+                let png = try await BoundedImageProcessor.background(
+                    sourcePNG: sourcePNG, contrast: contrast, scale: scale,
+                    offset: renderedOffset, previewSize: side)
+                try Task.checkCancellation()
+                guard self.sourcePNG == sourcePNG else { return }
+                design.contrast = contrast
+                design.backgroundColorHex = nil
+                design.backgroundPNG = png
+            } catch is CancellationError {
+                return
+            } catch {
+                ToastCenter.shared.error(error.localizedDescription)
+            }
+        }
     }
 
     /// Photo offsets are stored in the face's 240-point coordinate space, so
@@ -825,6 +821,9 @@ struct WatchfaceEditorView: View {
 
     /// Bake the chosen solid colour into a 480×480 background (no photo).
     private func applyBackgroundColor() {
+        previewRenderTask?.cancel()
+        backgroundRenderTask?.cancel()
+        backgroundRenderGeneration = nil
         let hex = backgroundColor.rgbHex
         design.backgroundColorHex = hex
         design.contrast = nil
@@ -842,6 +841,10 @@ struct WatchfaceEditorView: View {
 
     /// Drop the uploaded photo and fall back to the solid-colour background.
     private func removePhoto() {
+        previewRenderTask?.cancel()
+        backgroundRenderTask?.cancel()
+        backgroundRenderGeneration = nil
+        sourcePNG = nil
         sourceImage = nil
         adjustedPreview = nil
         photoItem = nil

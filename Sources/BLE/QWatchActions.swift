@@ -12,7 +12,7 @@ extension WatchManager {
     /// plaintext.
     func initializeQWatch() async {
         // Same serialization as initializeWatch — see the note there.
-        await WatchSession.exclusive {
+        try? await WatchSession.exclusive(for: connectionTokenSync()) {
             Self.initInProgress = true
             defer { Self.initInProgress = false }
             await initializeQWatchLocked()
@@ -21,8 +21,8 @@ extension WatchManager {
 
     /// The Q init sequence proper. Runs with the session held.
     private func initializeQWatchLocked() async {
-        let watchID = WatchRegistry.activeWatchIDSync()
-        func stillActive() -> Bool { WatchRegistry.activeWatchIDSync() == watchID }
+        guard let token = WatchSession.connectionToken else { return }
+        func stillActive() -> Bool { validatesConnectionToken(token) }
         do {
             let (firmware, model) = await MainActor.run { (self.firmwareVersion, self.modelNumber) }
             addLog("Q init — firmware \(firmware ?? "?"), model \(model ?? "? (2A24 pending)")")
@@ -48,7 +48,7 @@ extension WatchManager {
                 try? await setQButtons()
             }
             guard stillActive() else { return }
-            await MainActor.run { self.connectionState = .ready }
+            guard await markSessionReady(for: token) else { return }
             // A watch reconnecting mid-window (e.g. at 23:00) goes quiet
             // right away instead of waiting for the next maintenance tick.
             await QuietHoursManager.shared.evaluate()
@@ -70,7 +70,7 @@ extension WatchManager {
 
     /// Global settings supported by the hands-only Q family.
     func syncQSettings() async throws {
-        try await WatchSession.exclusive { try await syncQSettingsLocked() }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await syncQSettingsLocked() }
     }
 
     private func syncQSettingsLocked() async throws {
@@ -91,18 +91,18 @@ extension WatchManager {
     /// (2A19 also works on the Q watches, but the config file carries the
     /// richer battery data and the step count.)
     func readConfigurationQ() async throws {
-        try await WatchSession.exclusive { try await readConfigurationQLocked() }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await readConfigurationQLocked() }
     }
 
     private func readConfigurationQLocked() async throws {
-        let watchID = WatchRegistry.activeWatchIDSync()
+        let watchID = WatchSession.connectionToken?.watchID
         let lookup = FileLookupRequest(major: FossilFileHandle.configuration.major)
         try await run(lookup)
         guard !lookup.fileEmpty, let handle = lookup.resolvedHandle else { return }
 
         let get = FileGetRawRequest(handle: handle)
         try await run(get)
-        guard let content = get.strippedFileData else { return }
+        let content = try get.strippedFileData()
 
         let config = WatchConfiguration.parse(content)
         addLog("Q config: battery=\(config.batteryPercentage.map(String.init) ?? "?")% " +
@@ -110,7 +110,10 @@ extension WatchManager {
                "steps=\(config.currentStepCount.map(String.init) ?? "?"), " +
                "goal=\(config.dailyStepGoal.map(String.init) ?? "?")")
         await MainActor.run {
-            if let level = config.batteryPercentage { self.batteryLevel = level }
+            if let level = config.batteryPercentage {
+                self.batteryLevel = level
+                self.batteryObservationDate = Date()
+            }
             if let steps = config.currentStepCount {
                 self.watchStepCount = steps
                 if let watchID {
@@ -126,7 +129,7 @@ extension WatchManager {
     /// Starts/stops the watch vibration. The start
     /// vibration runs until stopped.
     func vibrateWatch(_ on: Bool) async throws {
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await self.run(QVibrateRequest(start: on))
             self.addLog(on ? "Q vibration started" : "Q vibration stopped")
         }
@@ -140,7 +143,7 @@ extension WatchManager {
         let alerts = QNotificationStore.alerts
         let file = alerts.isEmpty ? QNotificationFilterFile.nightFilter()
                                   : QNotificationFilterFile.encode(alerts)
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await self.run(FilePutRequest(handle: .notificationFilter,
                                               file: file,
                                               fileVersion: self.fileVersions.version(for: .notificationFilter)))
@@ -158,7 +161,7 @@ extension WatchManager {
         let alerts = QNotificationStore.alerts
         let file = night || alerts.isEmpty ? QNotificationFilterFile.nightFilter()
                                            : QNotificationFilterFile.encode(alerts)
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await self.run(FilePutRequest(handle: .notificationFilter, file: file,
                                               fileVersion: self.fileVersions.version(for: .notificationFilter)))
         }
@@ -169,12 +172,15 @@ extension WatchManager {
     /// store.
     func setQButtons() async throws {
         guard let functions = QButtonStore.functions else { return }
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await self.run(FilePutRequest(handle: .settingsButtons,
                                               file: QButtonConfigFile.build(functions),
                                               fileVersion: self.fileVersions.version(for: .settingsButtons)))
         }
         addLog("Q buttons uploaded: \(functions.map(\.rawValue).joined(separator: ", "))")
+        if functions.contains(.ringPhone) {
+            _ = await PhoneFinder.shared.prepareNotificationFallback()
+        }
     }
 
     /// Plays a test notification that matches `alert`'s filter entry, so the
@@ -191,7 +197,7 @@ extension WatchManager {
             sender: alert.kind == .contact ? alert.identifier : alert.displayName,
             message: "Test from Hybridge",
             messageId: UInt32(Date().timeIntervalSince1970))
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await self.run(FilePutRequest(handle: .notificationPlay, file: file,
                                               fileVersion: self.fileVersions.version(for: .notificationPlay)))
         }

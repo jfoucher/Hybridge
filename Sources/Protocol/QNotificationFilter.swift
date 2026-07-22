@@ -101,7 +101,8 @@ enum QNotificationFilterFile {
     /// Quiet-hours file: one stub app entry whose bundle id matches nothing
     /// real (so its CRC never fires), silent vibration, hands parked at 0°.
     /// Satisfies the never-push-empty rule while blocking every real alert.
-    /// Flag: stub-blocks-all needs on-watch verification on the Q Grant.
+    /// Verified on a real Q Grant: a never-matching CRC entry blocks all
+    /// notifications, and restoring the day filter re-enables them.
     static func nightFilter() -> Data {
         encode([QNotificationAlert(kind: .app, identifier: "eu.sixpixels.hybridge.quiet",
                                    displayName: "Quiet hours", degrees: 0, vibration: .silent)])
@@ -112,7 +113,8 @@ enum QNotificationFilterFile {
                                     vibration: UInt8) {
         var body = Data()
         if let name {
-            let nameBytes = name.nullTerminatedUTF8()
+            var nameBytes = name.utf8Prefix(maxBytes: 254)
+            nameBytes.append(0)
             body.append(contentsOf: [0x02, UInt8(nameBytes.count)])
             body.append(nameBytes)
         }

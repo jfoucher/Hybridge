@@ -8,7 +8,7 @@ class HandControlRequest: FossilRequest {
     override var startUUID: CBUUID { FossilUUID.char0002 }
 
     func payload() throws -> Data {
-        fatalError("payload not implemented")
+        throw FossilError.unexpectedResponse("\(name) has no hand-control payload")
     }
 
     override func startData() throws -> Data {

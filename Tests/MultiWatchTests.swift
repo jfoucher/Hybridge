@@ -63,6 +63,59 @@ final class WatchKindTests: XCTestCase {
     }
 }
 
+final class WatchActionAuthorizationTests: XCTestCase {
+    private let watchID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE")!
+    private let peripheralID = UUID(uuidString: "11111111-2222-3333-4444-555555555555")!
+
+    private func allows(kind: WatchKind = .hybridHR,
+                        token: WatchConnectionToken? = nil,
+                        attachedPeripheralID: UUID? = nil,
+                        activeWatchID: UUID? = nil,
+                        trusted: Bool = true,
+                        ready: Bool = true,
+                        authenticated: Bool = true) -> Bool {
+        let resolvedToken = token ?? WatchConnectionToken(
+            watchID: watchID, peripheralID: peripheralID,
+            generation: 7, kind: kind)
+        return WatchActionAuthorization.allows(
+            token: resolvedToken,
+            attachedPeripheralID: attachedPeripheralID ?? peripheralID,
+            activeWatchID: activeWatchID ?? watchID,
+            trusted: trusted,
+            sessionReady: ready,
+            sessionAuthenticated: authenticated,
+            connectedKind: kind)
+    }
+
+    func testOnlyTrustedReadyAuthenticatedHRSessionIsAuthorized() {
+        XCTAssertTrue(allows())
+        XCTAssertFalse(WatchActionAuthorization.allows(
+            token: nil, attachedPeripheralID: nil, activeWatchID: nil,
+            trusted: false, sessionReady: false,
+            sessionAuthenticated: false, connectedKind: .unknown))
+        XCTAssertFalse(allows(attachedPeripheralID: UUID()))
+        XCTAssertFalse(allows(activeWatchID: UUID()))
+        XCTAssertFalse(allows(trusted: false))
+        XCTAssertFalse(allows(ready: false))
+        XCTAssertFalse(allows(authenticated: false))
+    }
+
+    func testStaleFamilyAndUnsupportedSessionsFailClosed() {
+        let stale = WatchConnectionToken(
+            watchID: watchID, peripheralID: peripheralID,
+            generation: 6, kind: .hybridHR)
+        XCTAssertFalse(allows(kind: .fossilQ, token: stale))
+        XCTAssertFalse(allows(kind: .unknown))
+        XCTAssertFalse(allows(kind: .misfitQ))
+    }
+
+    func testExplicitlyTrustedReadyQDoesNotPretendToHaveProtocolAuthentication() {
+        XCTAssertTrue(allows(kind: .fossilQ, authenticated: false))
+        XCTAssertFalse(allows(kind: .fossilQ, trusted: false, authenticated: false))
+        XCTAssertFalse(allows(kind: .fossilQ, ready: false, authenticated: false))
+    }
+}
+
 final class WatchRegistryTests: XCTestCase {
     private var defaults: UserDefaults!
 
@@ -159,6 +212,23 @@ final class WatchRegistryTests: XCTestCase {
         XCTAssertEqual(registry.watches.map(\.id), [id])
         XCTAssertNil(registry.watches[0].kind)
         XCTAssertNil(registry.watches[0].firmware)
+    }
+
+    func testCorruptRosterRestoresLastVerifiedCopyAndPreservesBadBytes() {
+        let registry = WatchRegistry(defaults: defaults)
+        let id = UUID()
+        registry.register(id: id, name: "Safe watch")
+        let corrupt = Data("not-json".utf8)
+        defaults.set(corrupt, forKey: WatchRegistry.watchesKey)
+
+        let recovered = WatchRegistry(defaults: defaults)
+        XCTAssertEqual(recovered.watches.map(\.id), [id])
+        XCTAssertNotEqual(defaults.data(forKey: WatchRegistry.watchesKey), corrupt)
+        let preserved = defaults.dictionaryRepresentation().contains {
+            $0.key.hasPrefix(WatchRegistry.corruptWatchesPrefix)
+                && ($0.value as? Data) == corrupt
+        }
+        XCTAssertTrue(preserved)
     }
 }
 

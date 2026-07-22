@@ -89,4 +89,32 @@ final class WatchSessionTests: XCTestCase {
     func testNotHeldOutsideAnOperation() {
         XCTAssertFalse(WatchSession.isHeld)
     }
+
+    func testCancelledQueuedOperationNeverRuns() async {
+        let firstEntered = expectation(description: "first operation owns the gate")
+        let first = Task {
+            try await WatchSession.exclusive(for: nil) {
+                firstEntered.fulfill()
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        await fulfillment(of: [firstEntered], timeout: 1)
+
+        let bodyRan = expectation(description: "cancelled body must not run")
+        bodyRan.isInverted = true
+        let queued = Task {
+            try await WatchSession.exclusive(for: nil) { bodyRan.fulfill() }
+        }
+        queued.cancel()
+        do {
+            try await queued.value
+            XCTFail("cancelled waiter unexpectedly succeeded")
+        } catch is CancellationError {
+            // expected
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+        try? await first.value
+        await fulfillment(of: [bodyRan], timeout: 0.2)
+    }
 }

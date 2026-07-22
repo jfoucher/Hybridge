@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   test:
-    name: Build & test
+    name: Production gate
     # Keep CI on the same toolchain used for local development. macos-15's
     # default is currently Xcode 26.2, whose SwiftUI SDK does not include the
     # LocalizedStringResource overloads used by the app.
@@ -20,7 +20,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Verify Xcode version
         run: |
@@ -30,7 +30,7 @@ jobs:
       # The Xcode project is generated from project.yml and is not committed
       # (see .gitignore) — regenerate it before building.
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: scripts/install_xcodegen.sh
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -41,3 +41,16 @@ jobs:
       # local `scripts/xbuild.sh test` invocation.
       - name: Run unit tests
         run: scripts/xbuild.sh test
+
+      - name: Build Release
+        run: scripts/xbuild.sh build
+        env:
+          XBUILD_CONFIGURATION: Release
+
+      - name: Analyze Release
+        run: scripts/xbuild.sh analyze
+        env:
+          XBUILD_CONFIGURATION: Release
+
+      - name: Validate manifests, capabilities, metadata, and secrets
+        run: scripts/release_checks.sh

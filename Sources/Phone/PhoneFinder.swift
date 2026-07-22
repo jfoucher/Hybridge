@@ -27,12 +27,14 @@ import UserNotifications
 /// watch button is never dead — only the tone is. Force-quitting the app
 /// stops BLE wakes entirely, the same platform limitation as background
 /// activity sync, so nothing reaches the phone until the next manual launch.
+@MainActor
 final class PhoneFinder {
     static let shared = PhoneFinder()
 
     private var player: AVAudioPlayer?
     private var vibrateTimer: Timer?
     private var safetyTimer: Timer?
+    private var audioSessionActive = false
 
     private init() {
         // Audio is suspended by iOS the moment we background, but the player
@@ -42,20 +44,38 @@ final class PhoneFinder {
         NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification,
             object: nil, queue: .main) { [weak self] _ in
-                guard let self, self.player != nil else { return }
-                WatchManager.shared.addLog("PhoneFinder: stopped (app backgrounded)")
-                self.stopOnMain()
+                MainActor.assumeIsolated {
+                    guard let self, self.player != nil else { return }
+                    WatchManager.shared.addLog("PhoneFinder: stopped (app backgrounded)")
+                    self.stopOnMain()
+                }
             }
     }
 
     var isRinging: Bool { player?.isPlaying ?? false }
 
     func start() {
-        DispatchQueue.main.async { self.startOnMain() }
+        startOnMain()
     }
 
     func stop() {
-        DispatchQueue.main.async { self.stopOnMain() }
+        stopOnMain()
+    }
+
+    /// Called from explicit ring-phone app/button setup while the app is in
+    /// front, so the background fallback never discovers too late that local
+    /// notifications were never authorized.
+    func prepareNotificationFallback() async -> Bool {
+        let center = UNUserNotificationCenter.current()
+        let status = await center.notificationSettings().authorizationStatus
+        switch status {
+        case .authorized, .provisional, .ephemeral:
+            return true
+        case .notDetermined:
+            return (try? await center.requestAuthorization(options: [.alert, .sound])) == true
+        default:
+            return false
+        }
     }
 
     private func startOnMain() {
@@ -76,6 +96,7 @@ final class PhoneFinder {
             // playing and overrides the silent switch.
             try session.setCategory(.playback)
             try session.setActive(true)
+            audioSessionActive = true
         } catch {
             WatchManager.shared.addLog("PhoneFinder: session activation failed: \(error.localizedDescription)")
             postCannotRingNotification()
@@ -84,6 +105,7 @@ final class PhoneFinder {
 
         guard let url = Bundle.main.url(forResource: "ring", withExtension: "caf") else {
             WatchManager.shared.addLog("PhoneFinder: ring.caf resource missing")
+            cleanupOnMain(clearNotification: false)
             return
         }
         do {
@@ -91,7 +113,10 @@ final class PhoneFinder {
             newPlayer.numberOfLoops = -1
             newPlayer.volume = 1.0
             newPlayer.prepareToPlay()
-            newPlayer.play()
+            guard newPlayer.play() else {
+                throw NSError(domain: "PhoneFinder", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: "Audio playback did not start"])
+            }
             player = newPlayer
 
             vibrateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
@@ -99,25 +124,34 @@ final class PhoneFinder {
             }
             // Auto-stop even if the watch never sends "off" (BLE drop, etc.).
             safetyTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: false) { [weak self] _ in
-                self?.stopOnMain()
+                MainActor.assumeIsolated { self?.stopOnMain() }
             }
             WatchManager.shared.addLog("PhoneFinder: ringing")
         } catch {
             WatchManager.shared.addLog("PhoneFinder failed to start: \(error.localizedDescription)")
+            cleanupOnMain(clearNotification: false)
+            postCannotRingNotification()
         }
     }
 
     private func stopOnMain() {
-        guard player != nil else { return }
+        cleanupOnMain(clearNotification: true)
+        WatchManager.shared.addLog("PhoneFinder: stopped")
+    }
+
+    private func cleanupOnMain(clearNotification shouldClearNotification: Bool) {
         player?.stop()
         player = nil
         vibrateTimer?.invalidate()
         vibrateTimer = nil
         safetyTimer?.invalidate()
         safetyTimer = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        clearNotification()
-        WatchManager.shared.addLog("PhoneFinder: stopped")
+        if audioSessionActive {
+            try? AVAudioSession.sharedInstance().setActive(
+                false, options: .notifyOthersOnDeactivation)
+            audioSessionActive = false
+        }
+        if shouldClearNotification { clearNotification() }
     }
 
     private static let notificationId = "phoneFinder.ringing"

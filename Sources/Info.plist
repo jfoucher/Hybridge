@@ -32,10 +32,10 @@
 		<true/>
 	</dict>
 	<key>NSAppleMusicUsageDescription</key>
-	<string>Shows the current track on your watch and lets its buttons control playback.
+	<string>Lets configured Q watch buttons control Apple Music playback while Hybridge is running.
 </string>
 	<key>NSBluetoothAlwaysUsageDescription</key>
-	<string>Hybridge connects to your Hybrid HR watch over Bluetooth to set the time, alarms, settings and watchfaces.
+	<string>Hybridge connects to your supported Fossil hybrid watch over Bluetooth to set the time, alarms and compatible settings.
 </string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
 	<string>Sends your upcoming events to your watch.
@@ -44,7 +44,7 @@
 	<string>Hybridge does not read any Health data.
 </string>
 	<key>NSHealthUpdateUsageDescription</key>
-	<string>Hybridge writes the steps, heart rate, calories and SpO2 recorded by your watch into Apple Health.
+	<string>Hybridge writes watch-recorded steps, heart rate, calories, SpO2, sleep and workouts into Apple Health.
 </string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Jonathan Foucher</string>
@@ -52,7 +52,7 @@
 	<string>Connects to your Home Assistant server on your local network when the Home Assistant watch app requests entities or sends a control.
 </string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Records GPS distance for workouts you start on your watch (or from the app's Workout GPS screen). While a workout is active, location is used in the background — with the blue status-bar indicator showing — and stops when the workout ends. Also fetches local weather to show on your watch.
+	<string>Records GPS distance for workouts started while Hybridge is open (or from its Workout GPS screen). An active session can continue in the background with the blue status indicator and stops with the workout. Also fetches local weather to show on your watch.
 </string>
 	<key>UIAppFonts</key>
 	<array>

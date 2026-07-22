@@ -1,5 +1,5 @@
 import Foundation
-import CoreBluetooth
+@preconcurrency import CoreBluetooth
 
 enum FossilUUID {
     static let service = CBUUID(string: "3DDA0001-957F-7D4A-34A6-74696673696D")
@@ -127,6 +127,7 @@ enum FossilError: LocalizedError {
     case missingAuthKey
     case notAuthenticated
     case sessionNotHeld(String)
+    case staleConnection
 
     var errorDescription: String? {
         switch self {
@@ -142,6 +143,8 @@ enum FossilError: LocalizedError {
         case .notAuthenticated: return String(localized: "Not authenticated with the watch yet")
         case .sessionNotHeld(let name):
             return String(localized: "Internal error: \(name) issued without the watch session")
+        case .staleConnection:
+            return String(localized: "The active watch connection changed before the operation completed")
         }
     }
 }

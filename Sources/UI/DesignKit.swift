@@ -15,6 +15,7 @@ struct ThemedScreen<Content: View>: View {
     var action: (symbol: String, run: () -> Void)?
     @ViewBuilder var content: () -> Content
     @Environment(\.floatingTabBarHeight) private var tabBarHeight
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     init(_ title: LocalizedStringResource,
          action: (symbol: String, run: () -> Void)? = nil,
@@ -37,11 +38,14 @@ struct ThemedScreen<Content: View>: View {
             Theme.bg.ignoresSafeArea()
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 0) {
-                    HStack(alignment: .center) {
+                    HStack(alignment: dynamicTypeSize.isAccessibilitySize ? .top : .center) {
                         Text(title)
-                            .font(Theme.serif(40))
+                            .font(dynamicTypeSize.isAccessibilitySize
+                                  ? Theme.serif(25, relativeTo: .title3)
+                                  : Theme.serif(40))
                             .tracking(0.3)
                             .foregroundStyle(Theme.ink)
+                            .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                         if let action {
                             CircleActionButton(symbol: action.symbol, run: action.run)
@@ -177,6 +181,7 @@ struct SettingsRow<Trailing: View>: View {
     var showChevron = false
     var tap: (() -> Void)?
     @ViewBuilder var trailing: () -> Trailing
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     init(icon: String, iconTint: Color = Theme.accent, iconFill: Color = Theme.softFill,
          title: LocalizedStringResource, titleColor: Color = Theme.ink,
@@ -193,14 +198,28 @@ struct SettingsRow<Trailing: View>: View {
     }
 
     var body: some View {
-        let row = HStack(spacing: 13) {
-            IconTile(symbol: icon, tint: iconTint, fill: iconFill)
-            Text(title)
-                .font(Theme.sans(16, relativeTo: .body))
-                .foregroundStyle(titleColor)
-            Spacer(minLength: 8)
-            trailing()
-            if showChevron { Chevron() }
+        let row = Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top, spacing: 13) {
+                        IconTile(symbol: icon, tint: iconTint, fill: iconFill)
+                        titleText
+                        Spacer(minLength: 8)
+                        if showChevron { Chevron().padding(.top, 8) }
+                    }
+                    trailing()
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.leading, 43)
+                }
+            } else {
+                HStack(spacing: 13) {
+                    IconTile(symbol: icon, tint: iconTint, fill: iconFill)
+                    titleText
+                    Spacer(minLength: 8)
+                    trailing()
+                    if showChevron { Chevron() }
+                }
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
@@ -211,6 +230,13 @@ struct SettingsRow<Trailing: View>: View {
         } else {
             row
         }
+    }
+
+    private var titleText: some View {
+        Text(title)
+            .font(Theme.sans(16, relativeTo: .body))
+            .foregroundStyle(titleColor)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
@@ -297,36 +323,51 @@ private struct ThemedListModifier: ViewModifier {
 struct ThemedSegmented<T: Hashable>: View {
     let options: [(value: T, label: LocalizedStringResource)]
     @Binding var selection: T
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    @ViewBuilder
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(options, id: \.value) { opt in
-                let active = opt.value == selection
-                Button {
-                    selection = opt.value
-                } label: {
-                    Text(String(localized: opt.label))
-                        .font(Theme.sans(14, weight: active ? .semibold : .regular, relativeTo: .footnote))
-                        .foregroundStyle(active ? Theme.ink : Theme.sub)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .padding(.horizontal, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: 9, style: .continuous)
-                                .fill(active ? Theme.card : .clear)
-                                .themeShadow(active ? Theme.ShadowStyle(color: .black.opacity(0.08), radius: 1, y: 1)
-                                                    : Theme.ShadowStyle(color: .clear, radius: 0)))
-                        .contentShape(Rectangle())
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(spacing: 2) {
+                    ForEach(options, id: \.value) { optionButton($0) }
                 }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(active ? .isSelected : [])
-                .accessibilityLabel(Text(opt.label))
+            } else {
+                HStack(spacing: 0) {
+                    ForEach(options, id: \.value) { optionButton($0) }
+                }
             }
         }
         .padding(3)
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.softFill))
+    }
+
+    private func optionButton(_ option: (value: T, label: LocalizedStringResource)) -> some View {
+        let active = option.value == selection
+        return Button {
+            selection = option.value
+        } label: {
+            Text(String(localized: option.label))
+                .font(Theme.sans(14, weight: active ? .semibold : .regular,
+                                 relativeTo: .footnote))
+                .foregroundStyle(active ? Theme.ink : Theme.sub)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 1)
+                .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 1 : 0.75)
+                .frame(maxWidth: .infinity,
+                       alignment: dynamicTypeSize.isAccessibilitySize ? .leading : .center)
+                .padding(.vertical, dynamicTypeSize.isAccessibilitySize ? 10 : 7)
+                .padding(.horizontal, dynamicTypeSize.isAccessibilitySize ? 12 : 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(active ? Theme.card : .clear)
+                        .themeShadow(active
+                                     ? Theme.ShadowStyle(color: .black.opacity(0.08), radius: 1, y: 1)
+                                     : Theme.ShadowStyle(color: .clear, radius: 0)))
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(active ? .isSelected : [])
+        .accessibilityLabel(Text(option.label))
     }
 }
 

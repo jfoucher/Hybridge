@@ -61,7 +61,7 @@ struct WidgetSnapshot: Codable, Equatable {
         watchName == other.watchName
             && hasDisplay == other.hasDisplay
             && todaySteps == other.todaySteps
-            && stepsDate == other.stepsDate
+            && Calendar.current.isDate(stepsDate, inSameDayAs: other.stepsDate)
             && stepsAreLive == other.stepsAreLive
             && stepGoal == other.stepGoal
             && batteryPercent == other.batteryPercent
@@ -85,8 +85,12 @@ enum WidgetStore {
         return snapshot
     }
 
-    static func save(_ snapshot: WidgetSnapshot, defaults: UserDefaults? = UserDefaults(suiteName: appGroupID)) {
-        guard let defaults, let data = try? JSONEncoder().encode(snapshot) else { return }
+    @discardableResult
+    static func save(_ snapshot: WidgetSnapshot,
+                     defaults: UserDefaults? = UserDefaults(suiteName: appGroupID)) -> Bool {
+        guard let defaults, load(defaults: defaults) != snapshot,
+              let data = try? JSONEncoder().encode(snapshot) else { return false }
         defaults.set(data, forKey: snapshotKey)
+        return true
     }
 }

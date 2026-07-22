@@ -1149,6 +1149,27 @@ final class WappBuilderTests: XCTestCase {
 }
 
 final class ActivityParserTests: XCTestCase {
+    func testEveryInvalidPrefixOfValidHrFixtureThrows() throws {
+        var file = Data(count: 64)
+        file[2] = 22
+        let timestamp: UInt32 = 1_700_000_000
+        for index in 0..<4 {
+            file[8 + index] = UInt8((timestamp >> (8 * UInt32(index))) & 0xFF)
+        }
+        // One complete CE activity sample, followed by the four bytes that
+        // belong to the already-validated outer container CRC.
+        let record: [UInt8] = [0xCE, 0x08, 0x01, 0x02, 24, 2, 70, 0x45]
+        for (index, byte) in record.enumerated() { file[52 + index] = byte }
+
+        let parser = try ActivityParser.parse(file)
+        XCTAssertTrue(parser.isComplete)
+        XCTAssertEqual(parser.samples.count, 1)
+        for length in 0..<file.count {
+            XCTAssertThrowsError(try ActivityParser.parse(file.prefix(length)),
+                                 "truncated valid HR fixture parsed at length \(length)")
+        }
+    }
+
     /// Builds a synthetic no-HR-variant activity file: version 22, timestamp
     /// sync at 34, three 4-byte records from offset 44.
     func testNoHrVariantParsing() throws {
@@ -1178,6 +1199,10 @@ final class ActivityParserTests: XCTestCase {
         XCTAssertEqual(parser.samples[1].timestamp, Int(timestamp) + 60)
         XCTAssertFalse(parser.samples[1].isActive)
         XCTAssertEqual(parser.samples[2].stepCount, 50)
+        for length in 0..<file.count {
+            XCTAssertThrowsError(try ActivityParser.parse(file.prefix(length)),
+                                 "truncated valid no-HR fixture parsed at length \(length)")
+        }
     }
 
     func testRejectsWrongVersion() {
@@ -1211,6 +1236,7 @@ final class ActivityParserTests: XCTestCase {
         file.append(tlv(9, [0x01]))                      // Running
         for id in 10...16 { file.append(tlv(UInt8(id), [0xFF])) }   // 7 fillers
         file.append(0x00)                                // trailing pad
+        file.append(Data(count: 4))                      // container CRC trailer
 
         let parser = try ActivityParser.parse(file)
         XCTAssertEqual(parser.workouts.count, 1)

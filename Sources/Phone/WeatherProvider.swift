@@ -6,11 +6,10 @@ import UIKit
 /// Weather push for the watch's `weatherApp`, `weatherInfo` watchface widget,
 /// and the rain/UV widgets (GB: FossilHRWatchAdapter.java:1507-1660, 2011-2035).
 ///
-/// WeatherKit requires the `com.apple.developer.weatherkit` entitlement to be
-/// enabled on the App ID in the developer portal — without that the fetch
-/// throws immediately. Location uses when-in-use authorization only: a fresh
-/// fix is taken while the app is foregrounded and cached, so background
-/// requests (woken by the watch over BLE) never need Always permission.
+/// Validated on real hardware. Location uses when-in-use authorization only:
+/// a fresh fix is taken while foregrounded and cached, so background watch
+/// requests never need Always. Requires the WeatherKit entitlement
+/// (`com.apple.developer.weatherkit`).
 @MainActor
 final class WeatherProvider: NSObject, ObservableObject {
     static let shared = WeatherProvider()
@@ -25,21 +24,13 @@ final class WeatherProvider: NSObject, ObservableObject {
     @Published private(set) var lastCity: String?
 
     var isEnabled: Bool {
-        get {
-            HardwareValidation.watchWeather
-                && UserDefaults.standard.bool(forKey: Self.enabledKey)
-        }
-        set {
-            if HardwareValidation.watchWeather {
-                UserDefaults.standard.set(newValue, forKey: Self.enabledKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: Self.enabledKey)
-            }
-        }
+        get { UserDefaults.standard.bool(forKey: Self.enabledKey) }
+        set { UserDefaults.standard.set(newValue, forKey: Self.enabledKey) }
     }
 
     private let locationManager = CLLocationManager()
-    private var locationContinuation: CheckedContinuation<CLLocation?, Never>?
+    private var pendingLocation: (id: UUID, continuation: CheckedContinuation<CLLocation?, Never>)?
+    private var locationTask: Task<CLLocation?, Never>?
     private var cachedSnapshot: WeatherSnapshot?
     private var cachedAt: Date?
 
@@ -55,31 +46,45 @@ final class WeatherProvider: NSObject, ObservableObject {
 
     /// `weatherInfo` or `weatherApp._.config.locations` was asked for — GB
     /// sends both payloads regardless of which key triggered the request.
-    func respondFullWeather(requestId: Int) async {
-        guard isEnabled, let snapshot = await snapshot() else { return }
-        await WatchManager.shared.pushJsonWhenIdle(JsonPayloads.weatherInfoResponse(id: requestId, snapshot: snapshot))
-        await WatchManager.shared.pushJsonWhenIdle(JsonPayloads.weatherAppResponse(id: requestId, snapshot: snapshot))
+    func respondFullWeather(requestId: Int, token: WatchConnectionToken? = nil) async {
+        let target = token ?? WatchManager.shared.connectionTokenSync()
+        guard let target, WatchManager.shared.validatesConnectionToken(target),
+              isEnabled, let snapshot = await snapshot() else { return }
+        await WatchManager.shared.pushJsonWhenIdle(
+            JsonPayloads.weatherInfoResponse(id: requestId, snapshot: snapshot), expectedToken: target)
+        await WatchManager.shared.pushJsonWhenIdle(
+            JsonPayloads.weatherAppResponse(id: requestId, snapshot: snapshot), expectedToken: target)
         lastPushDate = Date()
     }
 
-    func respondRainWidget() async {
-        guard isEnabled, let snapshot = await snapshot() else { return }
-        await WatchManager.shared.pushJsonWhenIdle(JsonPayloads.rainWidgetResponse(rainPercent: snapshot.rain))
+    func respondRainWidget(token: WatchConnectionToken? = nil) async {
+        let target = token ?? WatchManager.shared.connectionTokenSync()
+        guard let target, WatchManager.shared.validatesConnectionToken(target),
+              isEnabled, let snapshot = await snapshot() else { return }
+        await WatchManager.shared.pushJsonWhenIdle(
+            JsonPayloads.rainWidgetResponse(rainPercent: snapshot.rain), expectedToken: target)
         lastPushDate = Date()
     }
 
-    func respondUVWidget() async {
-        guard isEnabled, let snapshot = await snapshot() else { return }
-        await WatchManager.shared.pushJsonWhenIdle(JsonPayloads.uvWidgetResponse(uv: snapshot.uv))
+    func respondUVWidget(token: WatchConnectionToken? = nil) async {
+        let target = token ?? WatchManager.shared.connectionTokenSync()
+        guard let target, WatchManager.shared.validatesConnectionToken(target),
+              isEnabled, let snapshot = await snapshot() else { return }
+        await WatchManager.shared.pushJsonWhenIdle(
+            JsonPayloads.uvWidgetResponse(uv: snapshot.uv), expectedToken: target)
         lastPushDate = Date()
     }
 
     /// Proactive push right after connect, so complications populate without
     /// the watch having to ask first.
     func pushIfEnabled() async {
-        guard isEnabled, let snapshot = await snapshot() else { return }
-        await WatchManager.shared.pushJsonWhenIdle(JsonPayloads.weatherInfoResponse(id: 0, snapshot: snapshot))
-        await WatchManager.shared.pushJsonWhenIdle(JsonPayloads.weatherAppResponse(id: 0, snapshot: snapshot))
+        guard let target = WatchManager.shared.connectionTokenSync(),
+              WatchManager.shared.validatesConnectionToken(target),
+              isEnabled, let snapshot = await snapshot() else { return }
+        await WatchManager.shared.pushJsonWhenIdle(
+            JsonPayloads.weatherInfoResponse(id: 0, snapshot: snapshot), expectedToken: target)
+        await WatchManager.shared.pushJsonWhenIdle(
+            JsonPayloads.weatherAppResponse(id: 0, snapshot: snapshot), expectedToken: target)
         lastPushDate = Date()
     }
 
@@ -134,13 +139,39 @@ final class WeatherProvider: NSObject, ObservableObject {
             locationManager.requestWhenInUseAuthorization()
             return nil     // prompt is async; this pass falls back to the cache
         case .authorizedWhenInUse, .authorizedAlways:
-            return await withCheckedContinuation { continuation in
-                self.locationContinuation = continuation
-                self.locationManager.requestLocation()
-            }
+            if let locationTask { return await locationTask.value }
+            let task = Task { await performOneShotLocation() }
+            locationTask = task
+            let result = await task.value
+            locationTask = nil
+            return result
         default:
             return nil
         }
+    }
+
+    private func performOneShotLocation() async -> CLLocation? {
+        let id = UUID()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                pendingLocation = (id, continuation)
+                locationManager.requestLocation()
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: .seconds(10))
+                    self?.finishLocation(id: id, result: nil)
+                }
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.finishLocation(id: id, result: nil)
+            }
+        }
+    }
+
+    private func finishLocation(id: UUID, result: CLLocation?) {
+        guard let pendingLocation, pendingLocation.id == id else { return }
+        self.pendingLocation = nil
+        pendingLocation.continuation.resume(returning: result)
     }
 
     // MARK: - Snapshot assembly
@@ -225,15 +256,15 @@ final class WeatherProvider: NSObject, ObservableObject {
 extension WeatherProvider: CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         Task { @MainActor in
-            self.locationContinuation?.resume(returning: locations.last)
-            self.locationContinuation = nil
+            guard let id = self.pendingLocation?.id else { return }
+            self.finishLocation(id: id, result: locations.last)
         }
     }
 
     nonisolated func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         Task { @MainActor in
-            self.locationContinuation?.resume(returning: nil)
-            self.locationContinuation = nil
+            guard let id = self.pendingLocation?.id else { return }
+            self.finishLocation(id: id, result: nil)
         }
     }
 }

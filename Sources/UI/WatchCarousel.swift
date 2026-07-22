@@ -1,5 +1,5 @@
-import SwiftUI
-import UIKit
+@preconcurrency import SwiftUI
+@preconcurrency import UIKit
 
 /// Item identity for the dashboard's horizontal watch carousel: one card per
 /// known watch (first-added → last, `WatchRegistry.watches` order), plus a
@@ -214,6 +214,7 @@ private struct AddWatchCard: View {
 /// Management sheet for one watch (opened by tapping the centered carousel
 /// card). Everything here is scoped to the selected watch; global preferences
 /// live in Settings and are re-applied whenever a compatible watch connects.
+@MainActor
 struct WatchManageSheet: View {
     private static let debugFileManagerTitle: LocalizedStringResource = "Debug file manager"
 
@@ -245,106 +246,11 @@ struct WatchManageSheet: View {
     var body: some View {
         NavigationStack {
             ThemedScreen(verbatimTitle: known.name) {
-                section("Name") {
-                    HStack(spacing: 13) {
-                        IconTile(symbol: "pencil")
-                        TextField("Watch name", text: $name)
-                            .font(Theme.sans(16, relativeTo: .body))
-                            .foregroundStyle(Theme.ink)
-                            .onSubmit(saveNameIfNeeded)
-                    }
-                    .padding(.horizontal, 16).padding(.vertical, 13)
-                }
-
-                section("Watch", topPadding: 22) {
-                    if kind.needsAuthKey {
-                        SettingsRow(icon: "lock", title: "Authenticated") {
-                            statusPill(watch.isAuthenticated ? String(localized: "Yes")
-                                                             : String(localized: "No"),
-                                       positive: watch.isAuthenticated)
-                        }
-                        Hairline(leading: 59)
-                    }
-                    SettingsRow(icon: "cpu", title: "Firmware") {
-                        Text(firmwareText)
-                            .font(Theme.mono(14))
-                            .foregroundStyle(Theme.sub)
-                    }
-                    if isActiveReady, let battery = watch.batteryLevel {
-                        Hairline(leading: 59)
-                        SettingsRow(icon: "battery.75", title: "Battery") {
-                            Text("\(battery)%")
-                                .font(Theme.mono(14))
-                                .foregroundStyle(Theme.sub)
-                        }
-                    }
-                    if kind.needsAuthKey {
-                        Hairline(leading: 59)
-                        SettingsRow(icon: "key", title: "Auth key", showChevron: true,
-                                    tap: { showKeyEntry = true })
-                    }
-                }
-
-                section("Appearance & calibration", topPadding: 22) {
-                    manageLink(icon: "paintbrush", title: "Watch appearance") {
-                        WatchSkinView()
-                    }
-                    Hairline(leading: 59)
-                    manageLink(icon: "clock.arrow.circlepath", title: "Calibrate hands",
-                               enabled: canManageHardware) {
-                        HandCalibrationView()
-                    }
-                }
-
-                if kind != .misfitQ {
-                    section("Bluetooth", topPadding: 22) {
-                        SettingsRow(icon: "link", title: "Bluetooth pairing") {
-                            Text(pairingStatusText)
-                                .font(Theme.sans(15, relativeTo: .body))
-                                .foregroundStyle(Theme.sub)
-                        }
-                        if watch.isDevicePaired != true {
-                            Hairline(leading: 59)
-                            SettingsRow(icon: "iphone.and.arrow.forward",
-                                        title: pairing ? "Waiting for iOS dialog…" : "Pair with iPhone",
-                                        titleColor: Theme.accent,
-                                        tap: canManageHardware && !pairing ? pair : nil)
-                                .opacity(canManageHardware && !pairing ? 1 : 0.5)
-                        }
-                    }
-                }
-
-                section("Advanced", topPadding: 22) {
-#if DEBUG
-                    manageLink(icon: "folder", title: Self.debugFileManagerTitle,
-                               enabled: canManageHardware) {
-                        FileManagerView()
-                    }
-                    Hairline(leading: 59)
-#endif
-                    SettingsRow(icon: "arrow.counterclockwise", iconTint: Theme.danger,
-                                iconFill: Theme.danger.opacity(0.1),
-                                title: "Factory reset", titleColor: Theme.danger,
-                                showChevron: true,
-                                tap: canFactoryReset ? { confirmingReset = true } : nil)
-                        .opacity(canFactoryReset ? 1 : 0.5)
-                }
-
-                section("Connection", topPadding: 22) {
-                    if isActiveReady {
-                        SettingsRow(icon: "bolt.slash", title: "Disconnect",
-                                    tap: { watch.disconnect() })
-                        Hairline(leading: 59)
-                    }
-                    SettingsRow(icon: "trash", iconTint: Theme.danger,
-                                iconFill: Theme.danger.opacity(0.1),
-                                title: "Forget watch", titleColor: Theme.danger,
-                                tap: { confirmingForget = true })
-                }
+                manageSections
             }
             .toolbarBackground(Theme.bg, for: .navigationBar)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
+            .toolbar(id: "watch-detail") {
+                ToolbarItem(id: "close", placement: .cancellationAction) {
                     Button("Close") {
                         saveNameIfNeeded()
                         dismiss()
@@ -374,6 +280,107 @@ struct WatchManageSheet: View {
         .tint(Theme.accent)
     }
 
+    @ViewBuilder
+    private var manageSections: some View {
+        nameSection
+        watchSection
+        appearanceSection
+        if kind != .misfitQ { bluetoothSection }
+        advancedSection
+        connectionSection
+    }
+
+    private var nameSection: some View {
+        section("Name") {
+            HStack(spacing: 13) {
+                IconTile(symbol: "pencil")
+                TextField("Watch name", text: $name)
+                    .font(Theme.sans(16, relativeTo: .body))
+                    .foregroundStyle(Theme.ink)
+                    .onSubmit(saveNameIfNeeded)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 13)
+        }
+    }
+
+    private var watchSection: some View {
+        section("Watch", topPadding: 22) {
+            if kind.needsAuthKey {
+                SettingsRow(icon: "lock", title: "Authenticated") {
+                    statusPill(watch.isAuthenticated ? String(localized: "Yes") : String(localized: "No"),
+                               positive: watch.isAuthenticated)
+                }
+                Hairline(leading: 59)
+            }
+            SettingsRow(icon: "cpu", title: "Firmware") {
+                Text(firmwareText).font(Theme.mono(14)).foregroundStyle(Theme.sub)
+            }
+            if isActiveReady, let battery = watch.batteryLevel {
+                Hairline(leading: 59)
+                SettingsRow(icon: "battery.75", title: "Battery") {
+                    Text("\(battery)%").font(Theme.mono(14)).foregroundStyle(Theme.sub)
+                }
+            }
+            if kind.needsAuthKey {
+                Hairline(leading: 59)
+                SettingsRow(icon: "key", title: "Auth key", showChevron: true,
+                            tap: { showKeyEntry = true })
+            }
+        }
+    }
+
+    private var appearanceSection: some View {
+        section("Appearance & calibration", topPadding: 22) {
+            manageLink(icon: "paintbrush", title: "Watch appearance") { WatchSkinView() }
+            Hairline(leading: 59)
+            manageLink(icon: "clock.arrow.circlepath", title: "Calibrate hands",
+                       enabled: canManageHardware) { HandCalibrationView() }
+        }
+    }
+
+    private var bluetoothSection: some View {
+        section("Bluetooth", topPadding: 22) {
+            SettingsRow(icon: "link", title: "Bluetooth pairing") {
+                Text(pairingStatusText).font(Theme.sans(15, relativeTo: .body)).foregroundStyle(Theme.sub)
+            }
+            if watch.isDevicePaired != true {
+                Hairline(leading: 59)
+                SettingsRow(icon: "iphone.and.arrow.forward",
+                            title: pairingActionTitle,
+                            titleColor: Theme.accent,
+                            tap: pairingAction)
+                    .opacity(canManageHardware && !pairing ? 1 : 0.5)
+            }
+        }
+    }
+
+    private var advancedSection: some View {
+        section("Advanced", topPadding: 22) {
+#if DEBUG
+            manageLink(icon: "folder", title: Self.debugFileManagerTitle,
+                       enabled: canManageHardware) { FileManagerView() }
+            Hairline(leading: 59)
+#endif
+            SettingsRow(icon: "arrow.counterclockwise", iconTint: Theme.danger,
+                        iconFill: Theme.danger.opacity(0.1), title: "Factory reset",
+                        titleColor: Theme.danger, showChevron: true,
+                        tap: canFactoryReset ? { confirmingReset = true } : nil)
+                .opacity(canFactoryReset ? 1 : 0.5)
+        }
+    }
+
+    private var connectionSection: some View {
+        section("Connection", topPadding: 22) {
+            if isActiveReady {
+                SettingsRow(icon: "bolt.slash", title: "Disconnect", tap: { watch.disconnect() })
+                Hairline(leading: 59)
+            }
+            SettingsRow(icon: "trash", iconTint: Theme.danger,
+                        iconFill: Theme.danger.opacity(0.1), title: "Forget watch",
+                        titleColor: Theme.danger, tap: { confirmingForget = true })
+        }
+    }
+
     private var firmwareText: String {
         if known.id == registry.activeWatchID, let firmware = watch.firmwareVersion {
             return firmware
@@ -388,6 +395,15 @@ struct WatchManageSheet: View {
         case .some(false): return String(localized: "Not paired")
         case .none: return String(localized: "Unknown")
         }
+    }
+
+    private var pairingActionTitle: LocalizedStringResource {
+        pairing ? "Waiting for iOS dialog…" : "Pair with iPhone"
+    }
+
+    private var pairingAction: (() -> Void)? {
+        guard canManageHardware, !pairing else { return nil }
+        return { pair() }
     }
 
     private func statusPill(_ text: String, positive: Bool) -> some View {

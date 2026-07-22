@@ -1,5 +1,21 @@
 import Foundation
 
+struct WatchConnectionToken: Equatable, Sendable {
+    let watchID: UUID
+    let peripheralID: UUID
+    let generation: UInt64
+    let kind: WatchKind
+
+    /// Kind is learned after the firmware read. It is metadata, not part of
+    /// the authority identity; a lease remains the same connection while its
+    /// kind transitions from unknown to the detected family.
+    func authorizes(_ other: WatchConnectionToken) -> Bool {
+        watchID == other.watchID
+            && peripheralID == other.peripheralID
+            && generation == other.generation
+    }
+}
+
 /// Mutual exclusion for *composed* watch operations.
 ///
 /// `WatchManager.run(_:)` serializes a single protocol request. That is not
@@ -26,6 +42,7 @@ import Foundation
 enum WatchSession {
     /// True while the current task already owns the session.
     @TaskLocal static var isHeld = false
+    @TaskLocal static var connectionToken: WatchConnectionToken?
 
     private static let gate = Gate()
 
@@ -33,9 +50,32 @@ enum WatchSession {
     /// calling task already holds the session, `body` runs immediately.
     static func exclusive<T>(_ body: () async throws -> T) async rethrows -> T {
         if isHeld { return try await body() }
-        await gate.acquire()
+        await gate.acquireUncancellable()
         do {
             let result = try await $isHeld.withValue(true) { try await body() }
+            await gate.release()
+            return result
+        } catch {
+            await gate.release()
+            throw error
+        }
+    }
+
+    /// Token-bound variant used by all production watch operations. The
+    /// token is captured before waiting for the FIFO gate, so a task queued
+    /// for watch A can never silently acquire the gate and run on watch B.
+    static func exclusive<T>(for token: WatchConnectionToken?,
+                             _ body: () async throws -> T) async throws -> T {
+        if isHeld { return try await body() }
+        try Task.checkCancellation()
+        try await gate.acquire()
+        do {
+            try Task.checkCancellation()
+            let result = try await $isHeld.withValue(true) {
+                try await $connectionToken.withValue(token) {
+                    try await body()
+                }
+            }
             await gate.release()
             return result
         } catch {
@@ -50,19 +90,56 @@ enum WatchSession {
     /// first-in-first-out and a newcomer can never barge ahead of a task that
     /// was already waiting.
     private actor Gate {
-        private var busy = false
-        private var waiters: [CheckedContinuation<Void, Never>] = []
+        private enum Continuation {
+            case cancellable(CheckedContinuation<Void, Error>)
+            case uncancellable(CheckedContinuation<Void, Never>)
 
-        func acquire() async {
+            func resume() {
+                switch self {
+                case .cancellable(let continuation): continuation.resume()
+                case .uncancellable(let continuation): continuation.resume()
+                }
+            }
+        }
+
+        private struct Waiter {
+            let id: UUID
+            let continuation: Continuation
+        }
+        private var busy = false
+        private var waiters: [Waiter] = []
+
+        func acquireUncancellable() async {
             if !busy {
                 busy = true
                 return
             }
-            // Parked until a release() resumes us; ownership is already ours
-            // at that point (busy was never cleared), so we don't re-check.
-            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                waiters.append(continuation)
+            await withCheckedContinuation { continuation in
+                waiters.append(Waiter(id: UUID(), continuation: .uncancellable(continuation)))
             }
+        }
+
+        func acquire() async throws {
+            try Task.checkCancellation()
+            if !busy {
+                busy = true
+                return
+            }
+            let id = UUID()
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    waiters.append(Waiter(id: id, continuation: .cancellable(continuation)))
+                }
+            } onCancel: {
+                Task { await self.cancel(id) }
+            }
+        }
+
+        private func cancel(_ id: UUID) {
+            guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+            let waiter = waiters.remove(at: index)
+            guard case .cancellable(let continuation) = waiter.continuation else { return }
+            continuation.resume(throwing: CancellationError())
         }
 
         func release() {
@@ -70,7 +147,7 @@ enum WatchSession {
                 busy = false
             } else {
                 // Keep `busy` true: the resumed waiter inherits the lock.
-                waiters.removeFirst().resume()
+                waiters.removeFirst().continuation.resume()
             }
         }
     }

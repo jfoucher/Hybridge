@@ -2,6 +2,22 @@ import Foundation
 import Combine
 import WidgetKit
 
+protocol WidgetReloading {
+    func reloadAllTimelines()
+}
+
+struct SystemWidgetReloader: WidgetReloading {
+    func reloadAllTimelines() { WidgetCenter.shared.reloadAllTimelines() }
+}
+
+protocol WidgetSnapshotStoring {
+    func save(_ snapshot: WidgetSnapshot) -> Bool
+}
+
+struct SystemWidgetSnapshotStore: WidgetSnapshotStoring {
+    func save(_ snapshot: WidgetSnapshot) -> Bool { WidgetStore.save(snapshot) }
+}
+
 /// One-way mirror from the app's live stores into the app-group snapshot the
 /// widget extension reads. Subscribes to the already-`@Published` sources
 /// instead of touching every mutation site, so all three battery write sites
@@ -19,8 +35,17 @@ final class WidgetBridge {
     private var pendingFlush: DispatchWorkItem?
     /// Last snapshot actually written, for the reload gate.
     private var lastWritten: WidgetSnapshot?
+    private let reloader: WidgetReloading
+    private let snapshotStore: WidgetSnapshotStoring
+    private let snapshotProvider: @MainActor () -> WidgetSnapshot
 
-    private init() {}
+    init(reloader: WidgetReloading = SystemWidgetReloader(),
+         snapshotStore: WidgetSnapshotStoring = SystemWidgetSnapshotStore(),
+         snapshotProvider: (@MainActor () -> WidgetSnapshot)? = nil) {
+        self.reloader = reloader
+        self.snapshotStore = snapshotStore
+        self.snapshotProvider = snapshotProvider ?? Self.buildLiveSnapshot
+    }
 
     func start() {
         guard cancellables.isEmpty else { return }
@@ -37,14 +62,16 @@ final class WidgetBridge {
         let registry = WatchRegistry.shared
         let publishers: [AnyPublisher<Void, Never>] = [
             watch.$connectionState.map { _ in () }.eraseToAnyPublisher(),
+            watch.$connectionObservationDate.map { _ in () }.eraseToAnyPublisher(),
             watch.$batteryLevel.map { _ in () }.eraseToAnyPublisher(),
+            watch.$batteryObservationDate.map { _ in () }.eraseToAnyPublisher(),
             watch.$watchStepCount.map { _ in () }.eraseToAnyPublisher(),
             fitness.$samples.map { _ in () }.eraseToAnyPublisher(),
             fitness.$liveStepCountsByWatch.map { _ in () }.eraseToAnyPublisher(),
             fitness.$lastSyncByWatch.map { _ in () }.eraseToAnyPublisher(),
             registry.$watches.map { _ in () }.eraseToAnyPublisher(),
             registry.$activeWatchID.map { _ in () }.eraseToAnyPublisher(),
-            NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+            NotificationCenter.default.publisher(for: .widgetRelevantSettingChanged)
                 .map { _ in () }.eraseToAnyPublisher(),
         ]
         return Publishers.MergeMany(publishers).eraseToAnyPublisher()
@@ -67,18 +94,15 @@ final class WidgetBridge {
     }
 
     private func flush() {
-        let snapshot = buildSnapshot()
-        WidgetStore.save(snapshot)
-        // Always write (keeps updatedAt/batteryDate fresh for the widget's
-        // own staleness math), but only spend reload budget when something
-        // visibly changed — connection-state flaps below .ready never do.
+        let snapshot = snapshotProvider()
+        guard snapshotStore.save(snapshot) else { return }
         if lastWritten == nil || !lastWritten!.rendersSameAs(snapshot) {
-            WidgetCenter.shared.reloadAllTimelines()
+            reloader.reloadAllTimelines()
         }
         lastWritten = snapshot
     }
 
-    private func buildSnapshot() -> WidgetSnapshot {
+    private static func buildLiveSnapshot() -> WidgetSnapshot {
         let watch = WatchManager.shared
         let active = WatchRegistry.shared.activeWatch
         let now = Date()
@@ -87,17 +111,23 @@ final class WidgetBridge {
         let todaySteps = FitnessStore.shared.stepsIncludingLive(onDay: now)
         let stepGoal = UserDefaults.standard.object(forKey: "stepGoal") as? Int ?? 10000
         return WidgetSnapshot(
-            updatedAt: now,
+            updatedAt: watch.connectionObservationDate,
             watchName: active?.name,
             hasDisplay: (active?.kind ?? .hybridHR).hasDisplay,
             todaySteps: todaySteps,
-            stepsDate: now,
+            stepsDate: FitnessStore.shared.latestStepObservationDate
+                ?? FitnessStore.shared.lastSync(for: active?.id)
+                ?? Calendar.current.startOfDay(for: now),
             stepsAreLive: FitnessStore.shared.hasLiveStepCount(onDay: now),
             stepGoal: stepGoal,
             batteryPercent: watch.batteryLevel,
-            batteryDate: watch.batteryLevel != nil ? now : nil,
+            batteryDate: watch.batteryObservationDate,
             isConnected: watch.connectionState == .ready,
             lastSyncDate: FitnessStore.shared.lastSync(for: active?.id)
         )
     }
+}
+
+extension Notification.Name {
+    static let widgetRelevantSettingChanged = Notification.Name("widgetRelevantSettingChanged")
 }

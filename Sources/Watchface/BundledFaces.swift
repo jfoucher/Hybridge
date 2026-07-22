@@ -25,13 +25,6 @@ enum BundledFaces {
             guard let data = try? Data(contentsOf: url),
                   let meta = WappReader.metadata(fromWapp: data), meta.isWatchface
             else { return nil }
-            if !HardwareValidation.watchWeather {
-                let hasWeatherWidget = WappReader.widgets(fromWapp: data)
-                    .contains { WidgetCatalog.isWeather($0.type) }
-                let hasWeatherText = WappReader.textLayers(fromWapp: data)
-                    .contains { $0.source.isWeather }
-                guard !hasWeatherWidget, !hasWeatherText else { return nil }
-            }
             let thumbURL = url.deletingPathExtension().appendingPathExtension("png")
             let thumbnail = UIImage(contentsOfFile: thumbURL.path)
             return BundledFace(url: url, name: meta.name,

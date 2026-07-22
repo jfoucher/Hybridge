@@ -4,6 +4,13 @@ import UIKit
 
 /// High-level watch operations, composed from serialized protocol requests.
 extension WatchManager {
+    /// Debug file-manager mutation still obeys the same token-bound session
+    /// invariant as production operations.
+    func deleteFileForDebug(handle: UInt16) async throws {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
+            try await self.run(FileDeleteRequest(handle: handle))
+        }
+    }
 
     /// Shared with initializeQWatch (QWatchActions.swift): true while either
     /// family's init sequence is running.
@@ -24,8 +31,9 @@ extension WatchManager {
     /// The auth key of the active watch — every protocol operation that
     /// needs the key runs against the watch the session belongs to.
     private func activeWatchKey() throws -> Data {
-        guard let watchID = WatchRegistry.activeWatchIDSync(),
-              let key = KeychainStore.loadKey(for: watchID) else {
+        guard let token = WatchSession.connectionToken ?? connectionTokenSync(),
+              validatesConnectionToken(token),
+              let key = KeychainStore.loadKey(for: token.watchID) else {
             throw FossilError.missingAuthKey
         }
         return key
@@ -39,7 +47,7 @@ extension WatchManager {
         // which is what the old spin-then-check did, minus that check's
         // check-then-act hole (two inits could both observe the flag clear
         // across the sleep and proceed).
-        await WatchSession.exclusive {
+        try? await WatchSession.exclusive(for: connectionTokenSync()) {
             Self.initInProgress = true
             defer { Self.initInProgress = false }
             await initializeWatchLocked()
@@ -50,8 +58,8 @@ extension WatchManager {
     private func initializeWatchLocked() async {
         // Bail out if the user switches watches mid-init: a slow init must
         // not send requests to, or publish state for, the wrong watch.
-        let watchID = WatchRegistry.activeWatchIDSync()
-        func stillActive() -> Bool { WatchRegistry.activeWatchIDSync() == watchID }
+        guard let token = WatchSession.connectionToken else { return }
+        func stillActive() -> Bool { validatesConnectionToken(token) }
         do {
             try await fetchDeviceInfo()
             try await authenticate()
@@ -71,16 +79,16 @@ extension WatchManager {
             guard stillActive() else { return }
             await reuploadReferencedAppsLocked()
             guard stillActive() else { return }
-            await MainActor.run { self.connectionState = .ready }
+            guard await markSessionReady(for: token) else { return }
             let defaults = UserDefaults.standard
             if defaults.data(forKey: WatchScopedKey.buttonSelections.rawValue) != nil {
                 try? await setButtons(ButtonStore.selections)
             }
-            if NotificationIconStore.shared.isEnabled {
+            if await MainActor.run(body: { NotificationIconStore.shared.isEnabled }) {
                 try? await setNotificationConfigurations()
             }
-            let upperKey = WatchScoped.key(.customWidgetUpper)
-            let lowerKey = WatchScoped.key(.customWidgetLower)
+            let upperKey = WatchScoped.key(.customWidgetUpper, watchID: token.watchID)
+            let lowerKey = WatchScoped.key(.customWidgetLower, watchID: token.watchID)
             if defaults.object(forKey: upperKey) != nil || defaults.object(forKey: lowerKey) != nil {
                 try? await setCustomWidgetText(
                     upper: defaults.string(forKey: upperKey) ?? "",
@@ -110,19 +118,22 @@ extension WatchManager {
     /// of paying for a second encrypted round-trip.
     @discardableResult
     func readConfiguration() async throws -> WatchConfiguration? {
-        try await WatchSession.exclusive { try await readConfigurationLocked() }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await readConfigurationLocked() }
     }
 
     @discardableResult
     private func readConfigurationLocked() async throws -> WatchConfiguration? {
-        let watchID = WatchRegistry.activeWatchIDSync()
+        let watchID = WatchSession.connectionToken?.watchID
         guard let config = try await fetchConfiguration() else { return nil }
         addLog("Config: battery=\(config.batteryPercentage.map(String.init) ?? "?")% " +
                "(\(config.batteryVoltageMV.map { "\($0)mV" } ?? "?")), " +
                "steps=\(config.currentStepCount.map(String.init) ?? "?"), " +
                "goal=\(config.dailyStepGoal.map(String.init) ?? "?")")
         await MainActor.run {
-            if let level = config.batteryPercentage { self.batteryLevel = level }
+            if let level = config.batteryPercentage {
+                self.batteryLevel = level
+                self.batteryObservationDate = Date()
+            }
             if let steps = config.currentStepCount {
                 self.watchStepCount = steps
                 if let watchID {
@@ -143,7 +154,7 @@ extension WatchManager {
     /// Reads and decrypts the configuration file (0x0800), returning the parsed
     /// items. Shared by `readConfiguration` and the body-metrics writer.
     private func fetchConfiguration() async throws -> WatchConfiguration? {
-        try await WatchSession.exclusive { try await fetchConfigurationLocked() }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await fetchConfigurationLocked() }
     }
 
     /// Lookup → handshake → encrypted get. The handshake and the get must not
@@ -158,8 +169,7 @@ extension WatchManager {
         let get = FileEncryptedGetRequest(handle: handle, key: key,
                                           phoneRandom: randoms.phone, watchRandom: randoms.watch)
         try await run(get)
-        guard let raw = get.fileData, raw.count > 16 else { return nil }
-        return WatchConfiguration.parse(raw.slice(12, raw.count - 16))
+        return WatchConfiguration.parse(try get.strippedFileData())
     }
 
     /// Whole years between a birth date and now (how the watch stores DOB —
@@ -174,7 +184,7 @@ extension WatchManager {
     func setBodyProfile(gender: ConfigItem.Gender, heightCm: Int, weightKg: Int,
                         birthDate: Date) async throws {
         // Read-modify-write: the read and the write must see the same config.
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await setBodyProfileLocked(gender: gender, heightCm: heightCm,
                                            weightKg: weightKg, birthDate: birthDate)
         }
@@ -254,7 +264,7 @@ extension WatchManager {
     /// through the authenticated encrypted get (mirrors readConfiguration) so
     /// the exported .bin is decrypted and diffable.
     func downloadForExport(handle: UInt16) async throws -> Data {
-        try await WatchSession.exclusive { try await downloadForExportLocked(handle: handle) }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await downloadForExportLocked(handle: handle) }
     }
 
     private func downloadForExportLocked(handle: UInt16) async throws -> Data {
@@ -269,24 +279,18 @@ extension WatchManager {
             target = resolved
         }
 
-        if WatchRegistry.activeKindSync().needsAuthKey && encryptedMajors.contains(major) {
+        if WatchSession.connectionToken?.kind.needsAuthKey == true && encryptedMajors.contains(major) {
             let key = try activeWatchKey()
             let randoms = try await authenticate()
             let get = FileEncryptedGetRequest(handle: target, key: key,
                                               phoneRandom: randoms.phone, watchRandom: randoms.watch)
             try await run(get)
-            guard let data = get.fileData else {
-                throw FossilError.unexpectedResponse("no data received")
-            }
-            return data
+            return try get.validatedFileData()
         }
 
         let get = FileGetRawRequest(handle: target)
         try await run(get)
-        guard let data = get.fileData else {
-            throw FossilError.unexpectedResponse("no data received")
-        }
-        return data
+        return try get.validatedFileData()
     }
 
     /// Vibrates the watch for up to 30 s so it can be found
@@ -299,7 +303,7 @@ extension WatchManager {
         guard firmware?.atLeast(2, 22) ?? true else {
             throw FossilError.unexpectedResponse("Find watch needs firmware 2.22 or newer")
         }
-        return try await WatchSession.exclusive {
+        return try await WatchSession.exclusive(for: connectionTokenSync()) {
             let request = ConfirmOnDeviceRequest()
             try await self.run(request)
             self.addLog(request.confirmed ? "Find watch: confirmed on watch" : "Find watch: timed out")
@@ -314,19 +318,21 @@ extension WatchManager {
     /// this family, i.e. Q); the Q hybrids have no confirm command, so this
     /// just vibrates for a few seconds then stops.
     func findActiveWatchAndConfirm() async throws -> Bool? {
-        if WatchRegistry.activeKindSync().needsAuthKey {
-            return try await findWatch()
+        let token = connectionTokenSync()
+        return try await WatchSession.exclusive(for: token) {
+            guard let token = WatchSession.connectionToken else { throw FossilError.staleConnection }
+            if token.kind.needsAuthKey { return try await self.findWatch() }
+            try await self.vibrateWatch(true)
+            try? await Task.sleep(for: .seconds(8))
+            try await self.vibrateWatch(false)
+            return nil
         }
-        try await vibrateWatch(true)
-        try? await Task.sleep(nanoseconds: 8_000_000_000)
-        try await vibrateWatch(false)
-        return nil
     }
 
     /// Wipes the watch back to factory state. The watch reboots and drops the
     /// connection; it will need a full re-setup afterwards.
     func factoryReset() async throws {
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await self.run(FactoryResetRequest())
             self.addLog("Factory reset sent — watch is rebooting")
         }
@@ -353,13 +359,12 @@ extension WatchManager {
     /// (GB: setNotificationConfigurations). The watch matches entries by
     /// CRC32 of the ANCS app identifier — the iOS bundle ID.
     func setNotificationConfigurations() async throws {
-        try await WatchSession.exclusive { try await setNotificationConfigurationsLocked() }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await setNotificationConfigurationsLocked() }
     }
 
     private func setNotificationConfigurationsLocked() async throws {
-        let store = NotificationIconStore.shared
-        let icons = await MainActor.run { store.iconAssets() }
-        let filters = await MainActor.run { store.filters() }
+        let icons = await MainActor.run { NotificationIconStore.shared.iconAssets() }
+        let filters = await MainActor.run { NotificationIconStore.shared.filters() }
 
         let iconFile = WatchNotificationIcon.file(icons)
         try await run(FilePutRequest(handle: .assetNotificationImages, file: iconFile,
@@ -385,7 +390,7 @@ extension WatchManager {
             let filters = await MainActor.run { NotificationIconStore.shared.filters() }
             file = NotificationFilterFile.encode(filters)
         }
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await self.run(FilePutRequest(handle: .notificationFilter, file: file,
                                               fileVersion: self.fileVersions.version(for: .notificationFilter)))
         }
@@ -397,7 +402,7 @@ extension WatchManager {
     func playNotification(sender: String, message: String) async throws {
         let file = NotificationPlayFile.encode(kind: .notification, packageName: "generic",
                                                sender: sender, message: message)
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await self.run(FilePutRequest(handle: .notificationPlay, file: file,
                                               fileVersion: self.fileVersions.version(for: .notificationPlay)))
         }
@@ -406,9 +411,7 @@ extension WatchManager {
     func fetchDeviceInfo() async throws {
         let request = FileGetRawRequest(handle: .deviceInfo)
         try await run(request)
-        if let content = request.strippedFileData {
-            fileVersions = DeviceFileVersions(deviceInfoFile: content)
-        }
+        fileVersions = DeviceFileVersions(deviceInfoFile: try request.strippedFileData())
     }
 
     /// Runs the key handshake. Also called before every encrypted file write —
@@ -423,6 +426,9 @@ extension WatchManager {
     /// and checkable rather than depending on that from a distance.
     @discardableResult
     func authenticate() async throws -> (phone: Data, watch: Data) {
+        guard let token = WatchSession.connectionToken else {
+            throw FossilError.staleConnection
+        }
         let key = try activeWatchKey()
         let previousState = await MainActor.run { self.connectionState }
         await MainActor.run {
@@ -434,7 +440,9 @@ extension WatchManager {
             guard let randoms = request.resultRandoms else {
                 throw FossilError.authenticationFailed("handshake did not produce session randoms")
             }
-            markAuthenticated()
+            guard await markAuthenticated(for: token) else {
+                throw FossilError.staleConnection
+            }
             return randoms
         } catch {
             await MainActor.run {
@@ -448,11 +456,12 @@ extension WatchManager {
     /// the answer. Cheap plain-text exchange, safe to run on every init.
     @discardableResult
     func checkDevicePairing() async throws -> Bool {
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             let check = CheckDevicePairingRequest()
             try await run(check)
-            await MainActor.run { self.isDevicePaired = check.isPaired }
-            return check.isPaired
+            let paired = check.isPaired
+            await MainActor.run { self.isDevicePaired = paired }
+            return paired
         }
     }
 
@@ -461,13 +470,14 @@ extension WatchManager {
     /// explicit user action — the dialog would otherwise pop up on every
     /// background reconnect.
     func performDevicePairing() async throws {
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             let perform = PerformDevicePairingRequest()
             try await run(perform)
-            await MainActor.run { self.isDevicePaired = perform.isPaired }
-            addLog(perform.isPaired ? "iOS pairing successful"
+            let paired = perform.isPaired
+            await MainActor.run { self.isDevicePaired = paired }
+            addLog(paired ? "iOS pairing successful"
                                     : "iOS pairing failed or was declined")
-            if !perform.isPaired {
+            if !paired {
                 throw FossilError.unexpectedResponse("watch reported pairing failure")
             }
         }
@@ -477,14 +487,14 @@ extension WatchManager {
     /// handshake.
     func writeConfig(_ items: [ConfigItem]) async throws {
         // Handshake + encrypted put must not be split by another operation.
-        try await WatchSession.exclusive { try await writeConfigLocked(items) }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await writeConfigLocked(items) }
     }
 
     private func writeConfigLocked(_ items: [ConfigItem]) async throws {
         // The non-HR Q hybrids take the same TLV file, just unencrypted —
         // one branch here keeps setTime() and every settings screen working
         // on both families.
-        guard WatchRegistry.activeKindSync().hasEncryptedFiles else {
+        guard WatchSession.connectionToken?.kind.hasEncryptedFiles == true else {
             try await writeConfigPlain(items)
             return
         }
@@ -504,7 +514,7 @@ extension WatchManager {
     }
 
     func setAlarms(_ alarms: [WatchAlarm]) async throws {
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             let version = self.fileVersions.version(for: .alarms)
             let file = version == 0x03
                 ? WatchAlarm.encodeFile(alarms)
@@ -516,7 +526,7 @@ extension WatchManager {
     }
 
     func refreshInstalledApps() async throws {
-        try await WatchSession.exclusive { try await refreshInstalledAppsLocked() }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await refreshInstalledAppsLocked() }
     }
 
     private func refreshInstalledAppsLocked() async throws {
@@ -529,27 +539,30 @@ extension WatchManager {
         guard let handle = lookup.resolvedHandle else { return }
         let get = FileGetRawRequest(handle: handle)
         try await run(get)
-        if let raw = get.fileData {
-            let apps = InstalledApp.parseList(fromRawFile: raw)
-            await MainActor.run { self.installedApps = apps }
-            addLog("Installed apps: \(apps.map(\.name).joined(separator: ", "))")
-        }
+        let raw = try get.validatedFileData()
+        let apps = InstalledApp.parseList(fromRawFile: raw)
+        await MainActor.run { self.installedApps = apps }
+        addLog("Installed apps: \(apps.map(\.name).joined(separator: ", "))")
     }
 
-    private var jsonIndexKey: String { WatchScoped.key(.jsonPushIndex) }
+    private func jsonIndexKey(for watchID: UUID) -> String {
+        WatchScoped.key(.jsonPushIndex, watchID: watchID)
+    }
 
     /// Raw JSON push to a UI_CONTROL handle (0x05xx, incrementing low byte).
     func pushJson(_ json: Data) async throws {
         // The JSON channel (0x05XX puts consumed by the watchface engine)
         // only exists on the HR. Weather/calendar/music observers can fire
         // while a Q is active — refuse here, the single choke point.
-        guard WatchRegistry.activeKindSync().hasJsonPush else {
-            throw FossilError.unexpectedResponse("watch has no JSON channel")
-        }
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
+            guard let token = WatchSession.connectionToken else { throw FossilError.staleConnection }
+            guard token.kind.hasJsonPush else {
+                throw FossilError.unexpectedResponse("watch has no JSON channel")
+            }
             let defaults = UserDefaults.standard
-            let index = defaults.integer(forKey: self.jsonIndexKey)
-            defaults.set((index + 1) & 0xFF, forKey: self.jsonIndexKey)
+            let key = self.jsonIndexKey(for: token.watchID)
+            let index = defaults.integer(forKey: key)
+            defaults.set((index + 1) & 0xFF, forKey: key)
             let handle = UInt16(0x0500) | UInt16(index & 0xFF)
             try await self.run(FilePutRawRequest(handle: handle, file: json))
         }
@@ -559,9 +572,13 @@ extension WatchManager {
         // Held across the theme push and the preview read-back so the two
         // stay one atomic sequence (and so refreshActiveWatchfaceImage is
         // always reached with the session held).
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
+            guard let token = WatchSession.connectionToken else { throw FossilError.staleConnection }
             try await self.pushJson(JsonPayloads.selectTheme(name))
+            guard self.validatesConnectionToken(token) else { throw FossilError.staleConnection }
             self.addLog("Activated watchface \(name)")
+            UserDefaults.standard.set(
+                name, forKey: WatchScoped.key(.activeWatchfaceName, watchID: token.watchID))
             await MainActor.run { self.activeWatchfaceName = name }
             await self.refreshActiveWatchfaceImage()
         }
@@ -571,6 +588,8 @@ extension WatchManager {
     /// its background for the dashboard preview (GB: downloadFile +
     /// FossilFileReader). Best-effort: failures just leave the image empty.
     func refreshActiveWatchfaceImage() async {
+        guard let token = WatchSession.connectionToken,
+              validatesConnectionToken(token) else { return }
         let watchfaces = await MainActor.run { self.installedApps.filter(\.isWatchface) }
         var name = await MainActor.run { self.activeWatchfaceName }
         // If we never activated a face (or it was uninstalled), the only
@@ -585,12 +604,15 @@ extension WatchManager {
         do {
             let get = FileGetRawRequest(handle: app.fullHandle)
             try await run(get)
-            guard let raw = get.fileData else { return }
+            let raw = try get.validatedFileData()
             let image = WappReader.backgroundImage(fromWapp: raw).map {
                 WatchfacePreviewRenderer.render(background: $0,
                                                 widgets: WappReader.widgets(fromWapp: raw),
                                                 texts: WappReader.textLayers(fromWapp: raw))
             }
+            guard validatesConnectionToken(token) else { return }
+            UserDefaults.standard.set(
+                name, forKey: WatchScoped.key(.activeWatchfaceName, watchID: token.watchID))
             await MainActor.run {
                 self.activeWatchfaceName = name
                 self.activeWatchfaceImage = image
@@ -610,7 +632,7 @@ extension WatchManager {
     }
 
     func deleteApp(_ app: InstalledApp) async throws {
-        try await WatchSession.exclusive { try await deleteAppLocked(app) }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await deleteAppLocked(app) }
     }
 
     private func deleteAppLocked(_ app: InstalledApp) async throws {
@@ -623,13 +645,10 @@ extension WatchManager {
     /// activity, so this is a plain get against the app's own handle — no
     /// lookup needed, `fullHandle` already came off the app list.
     func downloadApp(_ app: InstalledApp) async throws -> Data {
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             let get = FileGetRawRequest(handle: app.fullHandle)
             try await self.run(get)
-            guard let data = get.fileData else {
-                throw FossilError.unexpectedResponse("no data received")
-            }
-            return data
+            return try get.validatedFileData()
         }
     }
 
@@ -665,7 +684,8 @@ extension WatchManager {
         // Family guard FIRST: a Hybrid HR DFU image streamed to a hands-only Q
         // watch's OTA handle can brick hardware that is no longer manufactured
         // or serviced. Only the HR takes these images.
-        guard WatchRegistry.activeKindSync() == .hybridHR else {
+        let token = connectionTokenSync()
+        guard token?.kind == .hybridHR else {
             throw FossilError.unexpectedResponse("Firmware flashing is only supported on the Hybrid HR")
         }
         guard FirmwareReader.isFirmware(firmware) else {
@@ -677,7 +697,7 @@ extension WatchManager {
         }
         let version = FirmwareReader.version(firmware) ?? "?"
         addLog("Flashing firmware \(version) (\(firmware.count) bytes)…")
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: token) {
             try await self.run(FirmwareFilePutRequest(firmware: firmware))
         }
         addLog("Firmware transferred — watch is installing and will reboot")
@@ -699,7 +719,7 @@ extension WatchManager {
     }
 
     private func putAppFile(_ wapp: Data, name: String, activateAsWatchface: Bool) async throws {
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await putAppFileLocked(wapp, name: name, activateAsWatchface: activateAsWatchface)
         }
     }
@@ -730,6 +750,12 @@ extension WatchManager {
             // only apps are referenced by the global button/menu config.
             UploadedAppStore.shared.remember(name: name, wapp: wapp)
         }
+        if let watchID = WatchSession.connectionToken?.watchID {
+            CalendarSync.invalidateDelivery(for: watchID)
+        }
+        if staleNames.contains("ringPhoneApp") {
+            _ = await PhoneFinder.shared.prepareNotificationFallback()
+        }
     }
 
     /// Re-uploads any app referenced by the global button config that
@@ -740,9 +766,9 @@ extension WatchManager {
     /// leaves the mapping filtered out by `setButtonsLocked`'s installed-apps
     /// check. HR-only: Q hybrids have no app concept.
     private func reuploadReferencedAppsLocked() async {
-        guard WatchRegistry.activeKindSync() == .hybridHR else { return }
-        let watchID = WatchRegistry.activeWatchIDSync()
-        func stillActive() -> Bool { WatchRegistry.activeWatchIDSync() == watchID }
+        guard let token = WatchSession.connectionToken,
+              token.kind == .hybridHR else { return }
+        func stillActive() -> Bool { validatesConnectionToken(token) }
         let referenced = ButtonConfig.referencedAppNames(
             buttonSelections: ButtonStore.selections)
         let installed = await MainActor.run { Set(self.installedApps.map(\.name)) }
@@ -761,7 +787,7 @@ extension WatchManager {
     /// is firmware-built-in and always allowed), and resolves firmware-specific
     /// event strings.
     func setButtons(_ selections: [ButtonSelection]) async throws {
-        try await WatchSession.exclusive { try await setButtonsLocked(selections) }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await setButtonsLocked(selections) }
     }
 
     private func setButtonsLocked(_ selections: [ButtonSelection]) async throws {
@@ -778,7 +804,7 @@ extension WatchManager {
     /// Battery lives in the encrypted config file (no 0x180F service on the
     /// Hybrid HR).
     func refreshBattery() async throws {
-        guard WatchRegistry.activeKindSync().hasEncryptedFiles else {
+        guard WatchSession.connectionToken?.kind.hasEncryptedFiles == true else {
             try await readConfigurationQ()
             return
         }
@@ -791,12 +817,12 @@ extension WatchManager {
     /// user can judge the offset (GB: QHYBRID_COMMAND_CONTROL — GB zeroes
     /// all three hands; the sub-eye only physically exists on the Q).
     func startHandCalibration() async throws {
-        try await WatchSession.exclusive { try await startHandCalibrationLocked() }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await startHandCalibrationLocked() }
     }
 
     private func startHandCalibrationLocked() async throws {
         try await run(RequestHandsControlRequest())
-        let sub = WatchRegistry.activeKindSync().hasSubEye ? 0 : nil
+        let sub = WatchSession.connectionToken?.kind.hasSubEye == true ? 0 : nil
         try await run(MoveHandsRequest(relative: false, hour: 0, minute: 0, sub: sub))
         addLog("Hand calibration started")
     }
@@ -804,16 +830,16 @@ extension WatchManager {
     /// Nudges hands by signed degrees (positive = clockwise) while
     /// calibration is active.
     func moveHands(hour: Int? = nil, minute: Int? = nil, sub: Int? = nil) async throws {
-        try await WatchSession.exclusive {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
             try await self.run(MoveHandsRequest(relative: true, hour: hour, minute: minute, sub: sub,
-                                                bumpSingleDegree: WatchRegistry.activeKindSync().movesHandsMinTwoDegrees))
+                                                bumpSingleDegree: WatchSession.connectionToken?.kind.movesHandsMinTwoDegrees == true))
         }
     }
 
     /// Optionally persists the current positions as the new zero, then
     /// returns hand control to the watch (which re-syncs them to the time).
     func endHandCalibration(save: Bool) async throws {
-        try await WatchSession.exclusive { try await endHandCalibrationLocked(save: save) }
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await endHandCalibrationLocked(save: save) }
     }
 
     private func endHandCalibrationLocked(save: Bool) async throws {
@@ -828,13 +854,17 @@ extension WatchManager {
     /// deletes the file from the watch. Returns the number of new minute
     /// samples.
     @discardableResult
-    func syncActivity() async throws -> Int {
-        try await WatchSession.exclusive { try await syncActivityLocked() }
+    func syncActivity(retryQuarantined: Bool = true) async throws -> Int {
+        try await WatchSession.exclusive(for: connectionTokenSync()) {
+            try await syncActivityLocked(retryQuarantined: retryQuarantined)
+        }
     }
 
-    private func syncActivityLocked() async throws -> Int {
-        let watchID = WatchRegistry.activeWatchIDSync()
-        let encrypted = WatchRegistry.activeKindSync().hasEncryptedFiles
+    private func syncActivityLocked(retryQuarantined: Bool) async throws -> Int {
+        guard let token = WatchSession.connectionToken,
+              validatesConnectionToken(token) else { throw FossilError.staleConnection }
+        let watchID = token.watchID
+        let encrypted = token.kind.hasEncryptedFiles
 
         let lookup = FileLookupRequest(major: FossilFileHandle.activity.major)
         try await run(lookup)
@@ -846,6 +876,15 @@ extension WatchManager {
         guard let handle = lookup.resolvedHandle else {
             throw FossilError.unexpectedResponse("activity lookup returned no handle")
         }
+        if !retryQuarantined,
+           await ActivityQuarantineStore.shared.shouldSkipAutomaticDownload(
+                watchID: watchID, handle: handle) {
+            addLog("Activity file \(String(handle, radix: 16)) remains quarantined — skipping unchanged automatic download")
+            return 0
+        }
+        if retryQuarantined {
+            await ActivityQuarantineStore.shared.noteExplicitRetry(watchID: watchID, handle: handle)
+        }
 
         let fileData: Data
         if encrypted {
@@ -855,19 +894,13 @@ extension WatchManager {
             let get = FileEncryptedGetRequest(handle: handle, key: key,
                                               phoneRandom: randoms.phone, watchRandom: randoms.watch)
             try await run(get)
-            guard let data = get.fileData else {
-                throw FossilError.unexpectedResponse("no activity data received")
-            }
-            fileData = data
+            fileData = try get.validatedFileData()
         } else {
             // Q watches: same file, plaintext (the parser's no-HR branch
             // handles the step-only record format).
             let get = FileGetRawRequest(handle: handle)
             try await run(get)
-            guard let data = get.fileData else {
-                throw FossilError.unexpectedResponse("no activity data received")
-            }
-            fileData = data
+            fileData = try get.validatedFileData()
         }
         addLog("Activity file: \(fileData.count) bytes")
 
@@ -887,17 +920,35 @@ extension WatchManager {
             switch error {
             case .unsupportedVersion(let version): detail = "version \(version) is not supported"
             case .tooShort: detail = "the file is truncated or corrupt"
+            case .truncated(let offset, let context):
+                detail = "the file is truncated at byte \(offset) (\(context))"
+            case .invalidRecord(let offset, _):
+                detail = "the file contains an invalid record at byte \(offset)"
+            case .invalidWorkout(let offset, let context):
+                detail = "the workout at byte \(offset) is invalid (\(context))"
+            case .invalidTermination(let offset):
+                detail = "the activity stream ends incorrectly at byte \(offset)"
             }
-            addLog("⚠️ Activity file: \(detail) — sync paused. "
-                   + "The file is left on the watch; export it from the file manager to report it.")
+            do {
+                try await ActivityQuarantineStore.shared.quarantine(
+                    fileData, watchID: watchID, handle: handle,
+                    failureCategory: String(describing: error))
+                addLog("⚠️ Activity file: \(detail) — quarantined. The file remains on the watch and can be exported from Fitness.")
+            } catch {
+                addLog("⚠️ Activity file: \(detail). Raw quarantine save failed: \(error.localizedDescription); the watch copy is retained.")
+            }
             await MainActor.run {
-                ToastCenter.shared.error(String(localized: "Unreadable activity file — sync paused"))
+                ToastCenter.shared.error(String(localized: "Unreadable activity file — retained for retry or export"))
             }
-            await FitnessStore.shared.setLastSync(Date(), for: watchID)
             return 0
+        }
+        guard parser.isComplete else {
+            throw FossilError.unexpectedResponse("activity parser did not reach a complete state")
         }
         addLog("Parsed \(parser.samples.count) samples, \(parser.spo2Samples.count) SpO2, \(parser.workouts.count) workouts")
 
+        try Task.checkCancellation()
+        guard validatesConnectionToken(token) else { throw FossilError.staleConnection }
         let (newCount, persisted) = await FitnessStore.shared.merge(
             samples: parser.samples,
             spo2: parser.spo2Samples,
@@ -914,7 +965,10 @@ extension WatchManager {
             addLog("Activity merged but not persisted — keeping the file on the watch to retry")
             return newCount
         }
+        try Task.checkCancellation()
+        guard validatesConnectionToken(token) else { throw FossilError.staleConnection }
         try await run(FileDeleteRequest(handle: handle))
+        await ActivityQuarantineStore.shared.clear(watchID: watchID)
         addLog("Activity file deleted on watch (\(newCount) new samples)")
 
         // Refresh the watch's authoritative daily step counter so the Fitness
@@ -939,7 +993,7 @@ extension WatchManager {
     /// all of this, so it only matters for long-lived connections. Runs from
     /// the periodic timer and the will-enter-foreground notification.
     func periodicMaintenance() async {
-        await WatchSession.exclusive { await periodicMaintenanceLocked() }
+        try? await WatchSession.exclusive(for: connectionTokenSync()) { await periodicMaintenanceLocked() }
     }
 
     private func periodicMaintenanceLocked() async {
@@ -962,22 +1016,22 @@ extension WatchManager {
     /// Used by the on-connect init sequence and the periodic timer, so a
     /// reconnect right after a manual sync doesn't re-hit the watch.
     func syncActivityIfDue(minInterval: TimeInterval = autoSyncInterval) async {
-        await WatchSession.exclusive { await syncActivityIfDueLocked(minInterval: minInterval) }
+        try? await WatchSession.exclusive(for: connectionTokenSync()) { await syncActivityIfDueLocked(minInterval: minInterval) }
     }
 
     private func syncActivityIfDueLocked(minInterval: TimeInterval) async {
         // Connected is enough on the unencrypted Q; the HR also needs the
         // key handshake to have happened.
-        let needsAuth = WatchRegistry.activeKindSync().hasEncryptedFiles
+        let needsAuth = WatchSession.connectionToken?.kind.hasEncryptedFiles == true
         let canSync = await MainActor.run {
             (!needsAuth && self.connectionState == .ready) || self.isAuthenticated
         }
         guard canSync else { return }
-        let watchID = WatchRegistry.activeWatchIDSync()
+        let watchID = WatchSession.connectionToken?.watchID
         let last = await MainActor.run { FitnessStore.shared.lastSync(for: watchID) }
         if let last, Date().timeIntervalSince(last) < minInterval { return }
         do {
-            let count = try await syncActivity()
+            let count = try await syncActivity(retryQuarantined: false)
             if count > 0 { addLog("Auto-sync: \(count) new minute samples") }
         } catch {
             addLog("Auto-sync failed: \(error.localizedDescription)")
@@ -1000,12 +1054,23 @@ extension WatchManager {
     /// (used for replies to watch-initiated events).
     @discardableResult
     func pushJsonWhenIdle(_ json: Data, attempts: Int = 10) async -> Bool {
+        guard let token = connectionTokenSync() else { return false }
+        return await pushJsonWhenIdle(json, expectedToken: token, attempts: attempts)
+    }
+
+    @discardableResult
+    func pushJsonWhenIdle(_ json: Data, expectedToken: WatchConnectionToken,
+                          attempts: Int = 10) async -> Bool {
 #if DEBUG
         let isHomeAssistantResponse = String(data: json, encoding: .utf8)?
             .contains("homeAssistantApp._.config.response") == true
 #endif
         for attempt in 0..<attempts {
             do {
+                try Task.checkCancellation()
+                guard validatesConnectionToken(expectedToken) else {
+                    throw FossilError.staleConnection
+                }
                 try await pushJson(json)
 #if DEBUG
                 if isHomeAssistantResponse {
@@ -1025,7 +1090,8 @@ extension WatchManager {
                 if attempt == attempts - 1 {
                     addLog("Failed to answer watch request: \(error.localizedDescription)")
                 } else {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    do { try await Task.sleep(nanoseconds: 500_000_000) }
+                    catch { return false }
                 }
             }
         }
@@ -1038,13 +1104,14 @@ extension WatchManager {
     func runWhenIdle(attempts: Int = 10, _ makeRequest: () -> FossilRequest) async {
         for attempt in 0..<attempts {
             do {
-                try await WatchSession.exclusive { try await run(makeRequest()) }
+                try await WatchSession.exclusive(for: connectionTokenSync()) { try await run(makeRequest()) }
                 return
             } catch {
                 if attempt == attempts - 1 {
                     addLog("Failed after \(attempts) attempts: \(error.localizedDescription)")
                 } else {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    do { try await Task.sleep(nanoseconds: 500_000_000) }
+                    catch { return }
                 }
             }
         }
@@ -1054,7 +1121,8 @@ extension WatchManager {
     func handleWatchJsonRequest(_ jsonData: Data) {
         let limiter = WatchRequestLimiter.shared
         guard jsonData.count <= WatchRequestLimiter.maximumJSONBytes,
-              limiter.acquire(.frame, limit: 20, per: 1) else {
+              limiter.acquire(.frame, limit: 20, per: 1),
+              let eventToken = connectionTokenSync() else {
             addLog("Dropped oversized or rate-limited watch JSON request")
             return
         }
@@ -1086,22 +1154,23 @@ extension WatchManager {
             let tracker = WorkoutLocationTracker.shared
             switch (state, type) {
             case ("started", _):
-                if (workout["gps"] as? String) == "on" { tracker.start() }
+                if (workout["gps"] as? String) == "on" { tracker.start(for: eventToken) }
                 responseSet = ["workoutApp._.config.response": ["message": "", "type": "success"]]
             case ("paused", _):
-                tracker.pause()
+                tracker.pause(for: eventToken)
                 responseSet = ["workoutApp._.config.response": ["message": "", "type": "success"]]
             case ("resumed", _):
-                tracker.resume()
+                tracker.resume(for: eventToken)
                 responseSet = ["workoutApp._.config.response": ["message": "", "type": "success"]]
             case ("end", _):
-                tracker.stop()
+                tracker.stop(for: eventToken)
                 responseSet = ["workoutApp._.config.response": ["message": "", "type": "success"]]
-            case (_, "req_distance") where tracker.isTracking:
+            case (_, "req_distance") where tracker.isTracking(for: eventToken):
                 // The watch accumulates these deltas itself (GB semantics).
-                let change = tracker.pollChange()
-                responseSet = ["workoutApp._.config.gps": ["distance": change.distanceCm,
-                                                           "duration": change.durationSecs]]
+                if let change = tracker.pollChange(for: eventToken) {
+                    responseSet = ["workoutApp._.config.gps": ["distance": change.distanceCm,
+                                                               "duration": change.durationSecs]]
+                }
             case (_, "req_distance"), (_, "req_route"):
                 // No GPS running / no route images: the watch falls back to
                 // its own sensors (GB replies error here too).
@@ -1112,7 +1181,10 @@ extension WatchManager {
         } else if let ring = request["ringMyPhone"] as? [String: Any] {
             let action = ring["action"] as? String ?? ""
             addLog("ringMyPhone request (\(action))")
-            action == "on" ? PhoneFinder.shared.start() : PhoneFinder.shared.stop()
+            DispatchQueue.main.async {
+                guard self.validatesConnectionToken(eventToken) else { return }
+                action == "on" ? PhoneFinder.shared.start() : PhoneFinder.shared.stop()
+            }
             responseSet = ["ringMyPhone": ["result": action]]
         } else if let homeAssistant = request["homeAssistant"] as? [String: Any] {
             let action = homeAssistant["action"] as? String ?? ""
@@ -1127,7 +1199,8 @@ extension WatchManager {
             HomeAssistantLog.print("BLE watch request dispatched: transportID=\(requestId), action=\(action)")
             Task {
                 defer { limiter.release(.homeAssistant) }
-                await HomeAssistantBridge.handle(homeAssistant, requestID: requestId)
+                await HomeAssistantBridge.handle(homeAssistant, requestID: requestId,
+                                                 connection: eventToken)
             }
         } else if request["weatherInfo"] != nil || request["weatherApp._.config.locations"] != nil {
             addLog("weather request (full)")
@@ -1135,7 +1208,8 @@ extension WatchManager {
                                   maximumConcurrent: 1) else { return }
             Task {
                 defer { limiter.release(.weather) }
-                await WeatherProvider.shared.respondFullWeather(requestId: requestId)
+                await WeatherProvider.shared.respondFullWeather(
+                    requestId: requestId, token: eventToken)
             }
         } else if request["widgetChanceOfRain._.config.info"] != nil {
             addLog("weather request (rain widget)")
@@ -1143,7 +1217,7 @@ extension WatchManager {
                                   maximumConcurrent: 1) else { return }
             Task {
                 defer { limiter.release(.weather) }
-                await WeatherProvider.shared.respondRainWidget()
+                await WeatherProvider.shared.respondRainWidget(token: eventToken)
             }
         } else if request["widgetUV._.config.info"] != nil {
             addLog("weather request (UV widget)")
@@ -1151,7 +1225,7 @@ extension WatchManager {
                                   maximumConcurrent: 1) else { return }
             Task {
                 defer { limiter.release(.weather) }
-                await WeatherProvider.shared.respondUVWidget()
+                await WeatherProvider.shared.respondUVWidget(token: eventToken)
             }
         } else if request["master._.config.app_status"] != nil {
             // The watch reports an app open/close (e.g. weatherApp) and expects

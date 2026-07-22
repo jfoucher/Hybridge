@@ -92,7 +92,7 @@ enum QButtonFunction: String, CaseIterable, Codable {
         // GB's labels are correct.
         case .volumeDown: return Self.hex("01051200")
         case .stepGoalCompletion: return Self.hex("01021c00")
-        case .alternate: fatalError("alternate is multi-entry — use entries")
+        case .alternate: return Data()
         }
     }
 
@@ -145,12 +145,15 @@ enum QButtonFunction: String, CaseIterable, Codable {
                           + "b008000801050089050107f10400f104"
                           + "00f104000801500001000bd9cfda")
         case .alternate:
-            fatalError("alternate is multi-entry — use entries")
+            return Data()
         }
     }
 
     private static func hex(_ string: String) -> Data {
-        Data(hexString: string)!
+        // These are compile-time protocol constants. Parsing without a force
+        // unwrap keeps a damaged constant from turning a settings action into
+        // a process-ending trap; byte-oracle tests pin every emitted file.
+        Data(hexString: string) ?? Data()
     }
 }
 

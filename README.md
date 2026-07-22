@@ -34,7 +34,8 @@ one at a time and its screens adapt to the active watch's capabilities.
   - list watchfaces installed on the watch, activate or delete them
   - **build custom watchfaces**: photo background (converted to the watch's
     2-bit e-ink format), up to 4 complications (date, steps, HR, battery,
-    calories, active minutes, weather, chance of rain, UV, SpO2) placed by
+    calories, active minutes, SpO2 and weather - temperature, condition,
+    chance of rain, UV index) placed by
     dragging on a live preview, then upload & activate
 - Phone integration (Settings -> Find my phone / Weather / Calendar):
   - Music: handled entirely by iOS, not by this app. Once the watch is bonded,
@@ -45,10 +46,13 @@ one at a time and its screens adapt to the active watch's capabilities.
   - Find my phone: watch-triggered ringtone + vibration, with a test button -
     rings while the app is open; with it backgrounded the watch's event still
     arrives over BLE and posts a notification you tap to ring
-  - Weather: pushes current conditions, a 3-hour and 3-day forecast, and the
-    rain/UV widgets, fetched via WeatherKit for the last known location
   - Calendar: pushes up to 5 upcoming events to watchfaces/apps that render
     them (EventKit, `NSCalendarsFullAccessUsageDescription`)
+  - Weather: WeatherKit feeds current conditions (temperature, condition,
+    chance of rain, UV index) to watchfaces/apps that request them; a fresh
+    fix is taken with "When in Use" location while foregrounded and cached, so
+    the watch's background requests never need Always access
+    (`com.apple.developer.weatherkit`)
   - Quiet hours: a daily window (e.g. bedtime) that blocks every watch
     notification, on or off, no per-app level - Settings -> Quiet hours, or
     "Quiet now" for a one-off override until the next boundary
@@ -217,43 +221,22 @@ Fossil's server, only about your account, and stores nothing.
    python3 scripts/fetch_keys.py
    ```
 
-   It needs **no extra packages** in the common case — it uses only Python's
-   standard library. The API sits behind Cloudflare, but a plain request is
-   normally enough. Only if Cloudflare serves a hard JavaScript challenge (you'd
-   see an HTTP 403) does the script fall back to the optional `cloudscraper`
-   package — and it'll tell you to install it if that happens:
-
-   ```sh
-   python3 -m pip install --user cloudscraper   # only if the script asks for it
-   ```
+   It has no third-party dependencies and uses only Python's standard library.
+   Run it only on a computer you control. If the vendor serves a browser-only
+   Cloudflare challenge, the script exits without sending credentials anywhere
+   else.
 
    For Skagen/Citizen-branded hybrids use `--brand skagen` / `--brand citizen`.
 
-   It prints one line per watch: `device id` and the 32-hex-character key. Copy
+   Keys are redacted by default. Re-run locally with `--show-keys` to explicitly
+   print one line per watch: `device id` and the 32-hex-character key. Copy
    the key for your watch and paste it into Hybridge's **Auth key** screen
    (Settings → My Watches → your watch → Auth key). Spaces and a `0x` prefix
    are ignored on paste.
 
-**No Python / don't want to install anything?** Because the script needs only
-the standard library, you can paste it straight into an online Python runner
-and hit Run — no local install, nothing to set up. Two options, safest first:
-
-- **A cloud notebook you control** — e.g. [Google
-  Colab](https://colab.research.google.com). Paste the script into a cell and
-  run it; the code (and your password) execute in a session tied to *your*
-  Google account.
-- **A quick online runner** such as
-  [python.codeutility.io](https://python.codeutility.io/) — paste, Run, type
-  your email/password at the prompt. Confirmed working. **Note the tradeoff:**
-  these runners execute server-side, so your Fossil login passes through *their*
-  servers. If you use one, treat the password as exposed and change it
-  afterward, and never use a site you don't trust.
-
-We deliberately **don't** host a dedicated key-fetching website of our own: a
-purpose-built site asking for your watch credentials is exactly the shape of a
-phishing page, and we won't normalize handing that password over. Running the
-script locally keeps the password entirely on your own machine — always the
-safest choice.
+Do not paste the script or your Fossil credentials into Colab, an online code
+runner, or another third-party service. Local execution keeps the password on
+your own computer.
 
 > **Is this legal?** The script is original code (MIT-licensed like the rest of
 > this repo) — it contains none of Fossil's software or keys. It only retrieves

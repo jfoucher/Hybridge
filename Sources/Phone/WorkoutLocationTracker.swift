@@ -3,6 +3,16 @@ import CoreLocation
 import UIKit
 import UserNotifications
 
+protocol LocationProviding: AnyObject {
+    var authorizationStatus: CLAuthorizationStatus { get }
+    var allowsBackgroundLocationUpdates: Bool { get set }
+    func requestWhenInUseAuthorization()
+    func startUpdatingLocation()
+    func stopUpdatingLocation()
+}
+
+extension CLLocationManager: LocationProviding {}
+
 /// GPS distance source for watch-initiated workouts (GB bridges to
 /// OpenTracks; here CoreLocation feeds the watch directly). The watch polls
 /// `req_distance` periodically and accumulates the *changes* we return
@@ -15,10 +25,10 @@ import UserNotifications
 /// reference whose unsynchronized cross-thread assignment is a retain/release
 /// race, not merely a logic one. `manager` itself is only ever touched on
 /// main, which is what `start()`/`stop()`'s dispatch guarantees.
-final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManagerDelegate {
+final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManagerDelegate, @unchecked Sendable {
     static let shared = WorkoutLocationTracker()
 
-    private let manager = CLLocationManager()
+    private let manager: any LocationProviding
 
     private let lock = NSLock()
     // All of the following are guarded by `lock`.
@@ -26,8 +36,9 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
     private var totalDistanceMeters: Double = 0
     private var polledDistanceMeters: Double = 0
     private var lastPollDate = Date()
-    private var paused = false
-    private var tracking = false
+    private enum SessionState { case idle, requestingAuthorization, running, paused, stopping }
+    private var sessionState: SessionState = .idle
+    private var sessionToken: WatchConnectionToken?
 
     /// Main-thread mirrors for the UI (the Workout GPS demo screen). The
     /// authoritative state stays lock-guarded above; these are published from
@@ -35,16 +46,23 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
     @Published private(set) var isRunning = false
     @Published private(set) var liveDistanceMeters: Double = 0
 
-    private override init() {
+    private override convenience init() {
+        self.init(locationProvider: CLLocationManager())
+    }
+
+    init(locationProvider: any LocationProviding) {
+        manager = locationProvider
         super.init()
-        manager.delegate = self
-        manager.desiredAccuracy = kCLLocationAccuracyBest
-        manager.activityType = .fitness
-        manager.distanceFilter = 5
+        if let manager = locationProvider as? CLLocationManager {
+            manager.delegate = self
+            manager.desiredAccuracy = kCLLocationAccuracyBest
+            manager.activityType = .fitness
+            manager.distanceFilter = 5
+            manager.showsBackgroundLocationIndicator = true
+        }
         // Show the blue background-location indicator whenever GPS runs with
         // the app off screen. Transparency for the user, and the signal App
         // Review looks for when the `location` background mode is declared.
-        manager.showsBackgroundLocationIndicator = true
     }
 
     private func withLock<T>(_ body: () -> T) -> T {
@@ -53,17 +71,25 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
         return body()
     }
 
-    var isTracking: Bool { withLock { tracking } }
-
-    func start() {
+    func isTracking(for token: WatchConnectionToken?) -> Bool {
         withLock {
+            (sessionState == .running || sessionState == .paused)
+                && Self.sameSession(sessionToken, token)
+        }
+    }
+
+    func start(for token: WatchConnectionToken? = nil) {
+        let accepted = withLock { () -> Bool in
+            guard sessionState == .idle else { return false }
             lastLocation = nil
             totalDistanceMeters = 0
             polledDistanceMeters = 0
             lastPollDate = Date()
-            paused = false
-            tracking = true
+            sessionToken = token
+            sessionState = .requestingAuthorization
+            return true
         }
+        guard accepted else { return }
         DispatchQueue.main.async {
             let status = self.manager.authorizationStatus
             let backgrounded = UIApplication.shared.applicationState == .background
@@ -96,6 +122,7 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
             // background mode, which the app does declare).
             self.manager.allowsBackgroundLocationUpdates = true
             self.manager.startUpdatingLocation()
+            self.withLock { self.sessionState = .running }
             self.isRunning = true
             self.liveDistanceMeters = 0
             WatchManager.shared.addLog("Workout GPS started")
@@ -109,7 +136,7 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
     /// be exercised and shown to App Review without a paired watch.
     func startDemoWorkout() {
         WatchManager.shared.addLog("Workout GPS: demo session requested")
-        start()
+        start(for: nil)
     }
 
     func stopDemoWorkout() {
@@ -121,7 +148,10 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
 
     /// Rolls back the optimistic `tracking = true` and tells the user why.
     private func abortStart(status: CLAuthorizationStatus, backgrounded: Bool) {
-        withLock { tracking = false }
+        withLock {
+            sessionState = .idle
+            sessionToken = nil
+        }
         isRunning = false   // on main (abortStart is only called from start()'s main dispatch)
         reportCannotTrack(status: status, backgrounded: backgrounded)
     }
@@ -149,21 +179,26 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
             UNNotificationRequest(identifier: "workout.gpsUnavailable", content: content, trigger: nil))
     }
 
-    func pause() {
-        withLock { paused = true }
+    func pause(for token: WatchConnectionToken? = nil) {
+        withLock {
+            guard sessionState == .running, Self.sameSession(sessionToken, token) else { return }
+            sessionState = .paused
+        }
     }
 
-    func resume() {
+    func resume(for token: WatchConnectionToken? = nil) {
         withLock {
-            paused = false
+            guard sessionState == .paused, Self.sameSession(sessionToken, token) else { return }
+            sessionState = .running
             lastLocation = nil   // don't count distance covered while paused
         }
     }
 
-    func stop() {
+    func stop(for token: WatchConnectionToken? = nil) {
         let total: Double? = withLock {
-            guard tracking else { return nil }
-            tracking = false
+            guard sessionState != .idle, sessionState != .stopping,
+                  Self.sameSession(sessionToken, token) else { return nil }
+            sessionState = .stopping
             return totalDistanceMeters
         }
         guard let total else {
@@ -173,6 +208,10 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
         DispatchQueue.main.async {
             self.manager.stopUpdatingLocation()
             self.manager.allowsBackgroundLocationUpdates = false
+            self.withLock {
+                self.sessionState = .idle
+                self.sessionToken = nil
+            }
             self.isRunning = false
             self.liveDistanceMeters = total
             WatchManager.shared.addLog(String(format: "Workout GPS stopped (%.0f m total)", total))
@@ -181,24 +220,36 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
 
     /// Distance (cm) and time (s) since the previous poll — the semantics the
     /// watch expects for `workoutApp._.config.gps`.
-    func pollChange() -> (distanceCm: Int, durationSecs: Int) {
+    func pollChange(for token: WatchConnectionToken?) -> (distanceCm: Int, durationSecs: Int)? {
         withLock {
+            guard Self.sameSession(sessionToken, token),
+                  sessionState == .running || sessionState == .paused else { return nil }
             let now = Date()
             let distanceDelta = totalDistanceMeters - polledDistanceMeters
             let timeDelta = now.timeIntervalSince(lastPollDate)
             polledDistanceMeters = totalDistanceMeters
             lastPollDate = now
-            return (Int(distanceDelta * 100), Int(timeDelta.rounded()))
+            let centimeters = min(max(distanceDelta * 100, 0), Double(Int.max))
+            let seconds = min(max(timeDelta.rounded(), 0), Double(Int.max))
+            return (Int(centimeters), Int(seconds))
         }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let total: Double? = withLock {
-            guard tracking, !paused else { return nil }
+            guard sessionState == .running else { return nil }
             for location in locations {
-                guard location.horizontalAccuracy >= 0, location.horizontalAccuracy < 50 else { continue }
+                let age = Date().timeIntervalSince(location.timestamp)
+                guard location.horizontalAccuracy >= 0, location.horizontalAccuracy < 50,
+                      age >= -5, age <= 30 else { continue }
                 if let last = lastLocation {
-                    totalDistanceMeters += location.distance(from: last)
+                    guard location.timestamp > last.timestamp else { continue }
+                    let elapsed = location.timestamp.timeIntervalSince(last.timestamp)
+                    let distance = location.distance(from: last)
+                    guard distance <= 200, elapsed > 0, distance / elapsed <= 15 else {
+                        continue
+                    }
+                    totalDistanceMeters += distance
                 }
                 lastLocation = location
             }
@@ -210,5 +261,22 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         WatchManager.shared.addLog("Workout GPS error: \(error.localizedDescription)")
+        withLock {
+            sessionState = .idle
+            sessionToken = nil
+            lastLocation = nil
+        }
+        manager.stopUpdatingLocation()
+        manager.allowsBackgroundLocationUpdates = false
+        isRunning = false
+    }
+
+    private static func sameSession(_ lhs: WatchConnectionToken?,
+                                    _ rhs: WatchConnectionToken?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): return true
+        case let (lhs?, rhs?): return lhs.authorizes(rhs)
+        default: return false
+        }
     }
 }

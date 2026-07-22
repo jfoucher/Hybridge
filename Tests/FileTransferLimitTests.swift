@@ -17,7 +17,7 @@ final class FileTransferLimitTests: XCTestCase {
 
     /// A file-get status frame (opcode 1) declaring `size` bytes.
     private func statusFrame(opcode: UInt8, size: UInt32) -> Data {
-        var data = Data([opcode, 0x00, 0x00, 0x00])   // [opcode][minor][major][status=success]
+        var data = Data([opcode, 0x00, 0x01, 0x00])   // [opcode][minor][major][status=success]
         data.appendUInt32LE(size)
         return data
     }
@@ -113,13 +113,68 @@ final class FileTransferLimitTests: XCTestCase {
 
         try request.handle(uuid: FossilUUID.char0003,
                            value: statusFrame(opcode: 1, size: UInt32(payload.count)), io: io)
-        try request.handle(uuid: FossilUUID.char0004, value: Data([0x00]) + payload, io: io)
+        try request.handle(uuid: FossilUUID.char0004, value: Data([0x80]) + payload, io: io)
 
-        var done = Data([0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
+        var done = Data([0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00])
         done.appendUInt32LE(Checksums.crc32(payload))
         try request.handle(uuid: FossilUUID.char0003, value: done, io: io)
 
         XCTAssertTrue(request.isFinished)
         XCTAssertEqual(request.fileData, payload)
+    }
+
+    func testDataBeforeOpenIsRejected() {
+        var receiver = FileDownloadAccumulator()
+        XCTAssertThrowsError(try receiver.append(packet: Data([0x80, 1]), context: "test"))
+    }
+
+    func testDeclaredSizeWithoutTerminalFlagIsRejected() throws {
+        var receiver = FileDownloadAccumulator()
+        try receiver.open(size: 2, context: "test")
+        XCTAssertThrowsError(try receiver.append(packet: Data([0x00, 1, 2]), context: "test"))
+    }
+
+    func testPartialTerminalPacketIsRejectedEvenWithMatchingPartialCRC() throws {
+        var receiver = FileDownloadAccumulator()
+        try receiver.open(size: 3, context: "test")
+        XCTAssertThrowsError(try receiver.append(packet: Data([0x80, 1, 2]), context: "test"))
+    }
+
+    func testDuplicateAndOutOfOrderSequencesAreRejected() throws {
+        var duplicate = FileDownloadAccumulator()
+        try duplicate.open(size: 2, context: "test")
+        try duplicate.append(packet: Data([0x00, 1]), context: "test")
+        XCTAssertThrowsError(try duplicate.append(packet: Data([0x80, 2]), context: "test"))
+
+        var skipped = FileDownloadAccumulator()
+        try skipped.open(size: 1, context: "test")
+        XCTAssertThrowsError(try skipped.append(packet: Data([0x81, 1]), context: "test"))
+    }
+
+    func testCRCBeforeTerminalAndFramesAfterCompletionAreRejected() throws {
+        var receiver = FileDownloadAccumulator()
+        try receiver.open(size: 1, context: "test")
+        XCTAssertThrowsError(try receiver.finish(expectedCRC: 0, context: "test"))
+        try receiver.append(packet: Data([0x80, 7]), context: "test")
+        _ = try receiver.finish(expectedCRC: Checksums.crc32(Data([7])), context: "test")
+        XCTAssertThrowsError(try receiver.append(packet: Data([0x81, 8]), context: "test"))
+    }
+
+    func testInnerContainerRejectsWrongLengthTrailingBytesAndCRC() throws {
+        let payload = Data([1, 2, 3])
+        var valid = Data()
+        valid.appendUInt16LE(0x0100)
+        valid.append(contentsOf: [2, 0])
+        valid.appendUInt32LE(0)
+        valid.appendUInt32LE(UInt32(payload.count))
+        valid.append(payload)
+        valid.appendUInt32LE(Checksums.crc32c(payload))
+        XCTAssertEqual(try FossilFileContainer.payload(from: valid, expectedHandle: 0x0100), payload)
+
+        var trailing = valid; trailing.append(0)
+        XCTAssertThrowsError(try FossilFileContainer.validate(trailing, expectedHandle: 0x0100))
+        var corrupt = valid; corrupt[12] ^= 0xFF
+        XCTAssertThrowsError(try FossilFileContainer.validate(corrupt, expectedHandle: 0x0100))
+        XCTAssertThrowsError(try FossilFileContainer.validate(valid, expectedHandle: 0x0200))
     }
 }

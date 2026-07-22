@@ -62,6 +62,20 @@ final class UploadedAppStoreTests: XCTestCase {
         XCTAssertEqual(reloaded.data(forName: "musicApp"), Data("bytes".utf8))
     }
 
+    func testCorruptPrimaryIndexRecoversLastVerifiedIndex() throws {
+        let bytes = Data("durable bytes".utf8)
+        XCTAssertTrue(UploadedAppStore(directory: directory)
+            .remember(name: "homeAssistantApp", wapp: bytes))
+        try Data("corrupt".utf8).write(to: directory.appendingPathComponent("index.json"))
+
+        let recovered = UploadedAppStore(directory: directory)
+        XCTAssertEqual(recovered.names, ["homeAssistantApp"])
+        XCTAssertEqual(recovered.data(forName: "homeAssistantApp"), bytes)
+        XCTAssertTrue(try FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil)
+            .contains { $0.lastPathComponent.hasPrefix("index.corrupt-") })
+    }
+
     // MARK: - ButtonConfig.referencedAppNames
 
     private func selection(_ appName: String) -> ButtonSelection {

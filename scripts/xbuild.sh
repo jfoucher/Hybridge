@@ -10,6 +10,7 @@
 #   scripts/xbuild.sh test
 #   scripts/xbuild.sh test HybridgeTests/ProtocolTests/testAlarmTLVFile
 #   scripts/xbuild.sh test HybridgeTests/BundledFacesTests
+#   scripts/xbuild.sh analyze
 #
 # Full untouched output always lands in /tmp/xbuild-<cmd>.log if you need
 # to dig deeper than the filtered summary.
@@ -53,8 +54,15 @@ case "$cmd" in
     status=${PIPESTATUS[0]:-$?}
     set -e
     ;;
+  analyze)
+    set +e
+    xcodebuild analyze -project "$project" -scheme "$scheme" -configuration "$configuration" -destination "$destination" 2>&1 | tee "$logfile" | \
+      grep -E ' error:| warning:|ANALYZE SUCCEEDED|ANALYZE FAILED|^\*\* '
+    status=${PIPESTATUS[0]:-$?}
+    set -e
+    ;;
   *)
-    echo "usage: $0 {build|test} [only-testing-target]" >&2
+    echo "usage: $0 {build|test|analyze} [only-testing-target]" >&2
     exit 2
     ;;
 esac

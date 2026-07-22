@@ -48,6 +48,9 @@ struct ActivityParser {
     private(set) var samples: [ActivitySample] = []
     private(set) var spo2Samples: [SpO2Sample] = []
     private(set) var workouts: [WorkoutSummary] = []
+    /// Defensive deletion invariant: only a parser that reached the exact end
+    /// of the structurally validated record stream reports completeness.
+    private(set) var isComplete = false
 
     private var heartRateQuality = 0
     private var wearingState = 0
@@ -63,9 +66,13 @@ struct ActivityParser {
         var isActive = false
     }
 
-    enum ParseError: Error {
+    enum ParseError: Error, Equatable {
         case tooShort
         case unsupportedVersion(Int)
+        case truncated(offset: Int, context: String)
+        case invalidRecord(offset: Int, marker: UInt8)
+        case invalidWorkout(offset: Int, context: String)
+        case invalidTermination(offset: Int)
     }
 
     static func parse(_ file: Data) throws -> ActivityParser {
@@ -82,25 +89,30 @@ struct ActivityParser {
 
         let markers: Set<UInt8> = [0xCE, 0xC2, 0xE2, 0xE0, 0xDD, 0xD6, 0xCB, 0xCC, 0xCF]
         if markers.contains(file.u8(at: 52)) {
-            parseHrVariant(file)
+            try parseHrVariant(file)
         } else {
-            parseNoHrVariant(file)
+            try parseNoHrVariant(file)
         }
-        // Flush the trailing pending sample the way finishCurrentPacket would
-        // NOT
+        isComplete = true
     }
 
     // MARK: No-HR variant: fixed 4-byte records from offset 44
 
-    private mutating func parseNoHrVariant(_ file: Data) {
+    private mutating func parseNoHrVariant(_ file: Data) throws {
         currentTimestamp = Int(file.u32LE(at: 34))
         var pos = 44
-        while pos <= file.count - 4 {
+        let contentEnd = file.count - 4
+        guard contentEnd >= pos, (contentEnd - pos).isMultiple(of: 4) else {
+            throw ParseError.invalidTermination(offset: max(pos, contentEnd))
+        }
+        while pos < contentEnd {
             let varLo = Int(file.u8(at: pos))
             let varHi = Int(file.u8(at: pos + 1))
             let hrByte = Int(file.u8(at: pos + 2))
             let flags = Int(file.u8(at: pos + 3))
-            if hrByte != 0xFF { break }
+            guard hrByte == 0xFF else {
+                throw ParseError.invalidRecord(offset: pos, marker: UInt8(hrByte))
+            }
 
             var entry = PendingSample()
             parseVariability(lower: varLo, higher: varHi, into: &entry)
@@ -122,61 +134,88 @@ struct ActivityParser {
 
     // MARK: HR variant: marker stream from offset 52
 
-    private mutating func parseHrVariant(_ file: Data) {
-        var reader = ByteReader(data: file, position: 52)
+    private mutating func parseHrVariant(_ file: Data) throws {
+        let contentEnd = file.count - 4
+        var reader = ByteReader(data: file, position: 52, limit: contentEnd)
         finishPending()
 
-        while reader.position < file.count - 4 {
-            guard let next = reader.readByte() else { return }
+        while reader.position < contentEnd {
+            let markerOffset = reader.position
+            guard let next = reader.readByte() else {
+                throw ParseError.truncated(offset: markerOffset, context: "record marker")
+            }
             switch next {
             case 0xCE:
                 guard let wearByte = reader.readByte(),
                       let f1 = reader.readByte(),
-                      let f2 = reader.readByte() else { return }
+                      let f2 = reader.readByte() else {
+                    throw ParseError.truncated(offset: reader.position, context: "heart-rate record header")
+                }
                 parseWearByte(wearByte)
 
                 if f1 == 0xE2 && f2 == 0x04 {
-                    guard let timestamp = reader.readU32LE() else { return }
-                    _ = reader.readU16LE()   // duration
-                    _ = reader.readU16LE()   // minutes offset
+                    guard let timestamp = reader.readU32LE(),
+                          reader.readU16LE() != nil,
+                          reader.readU16LE() != nil else {
+                        throw ParseError.truncated(offset: reader.position, context: "timestamp record")
+                    }
                     currentTimestamp = Int(timestamp)
                 } else if f1 == 0xD3 {
                     // Workout-related extras; skip fields like the Java code.
-                    guard reader.skip(2) else { return }
-                    guard let v1 = reader.readByte() else { return }
+                    guard reader.skip(2), let v1 = reader.readByte() else {
+                        throw ParseError.truncated(offset: reader.position, context: "workout heart-rate record")
+                    }
                     let v2 = reader.peek(0) ?? 0
                     // Bounds-checked look-back (was a raw `file.u8` that would
                     // trap on a short/corrupt file): 0 is a safe "not 0x08".
                     let infoB0 = reader.peek(-3) ?? 0
                     if v1 == 0xDF {
                         _ = v2
-                        guard reader.skip(1) else { return }
+                        guard reader.skip(1) else {
+                            throw ParseError.truncated(offset: reader.position, context: "workout maximum heart rate")
+                        }
                         if infoB0 == 0x08 {
-                            guard reader.skip(11) else { return }
+                            guard reader.skip(11) else {
+                                throw ParseError.truncated(offset: reader.position, context: "workout statistics")
+                            }
                         } else if let probe = reader.peek(4), !Self.isMarker(probe) {
-                            guard reader.skip(3) else { return }
+                            guard reader.skip(3) else {
+                                throw ParseError.truncated(offset: reader.position, context: "workout statistics")
+                            }
                         }
                     } else if v1 == 0xE2 && v2 == 0x04 {
-                        guard reader.skip(13) else { return }
+                        guard reader.skip(13) else {
+                            throw ParseError.truncated(offset: reader.position, context: "workout timestamp")
+                        }
                         if let probe = reader.peek(0), !Self.isMarker(probe) {
-                            guard reader.skip(3) else { return }
+                            guard reader.skip(3) else {
+                                throw ParseError.truncated(offset: reader.position, context: "workout timestamp suffix")
+                            }
                         }
                     } else if let probe = reader.peek(4), !Self.isMarker(probe) {
-                        guard reader.skip(1) else { return }
+                        guard reader.skip(1) else {
+                            throw ParseError.truncated(offset: reader.position, context: "workout extension")
+                        }
                     }
                 } else if f1 == 0xCF || f1 == 0xDF {
                     continue
                 } else if f1 == 0xD6 {
-                    guard let spo2 = reader.readByte() else { return }
+                    guard let spo2 = reader.readByte() else {
+                        throw ParseError.truncated(offset: reader.position, context: "SpO2 value")
+                    }
                     spo2Samples.append(SpO2Sample(timestamp: currentTimestamp, value: Int(spo2)))
-                    guard reader.skip(3) else { return }
+                    guard reader.skip(3) else {
+                        throw ParseError.truncated(offset: reader.position, context: "SpO2 statistics")
+                    }
                 } else if f1 == 0xFE && f2 == 0xFE {
                     if reader.peek(0) == 0xFE { _ = reader.readByte() }
                 } else if let probe = reader.peek(2), Self.isMarker(probe) {
                     // Compact record: f1/f2 already are the variability bytes.
                     ensurePending()
                     parseVariability(lower: Int(f1), higher: Int(f2), into: &pending!)
-                    guard let heartRate = reader.readByte(), let caloriesRaw = reader.readByte() else { return }
+                    guard let heartRate = reader.readByte(), let caloriesRaw = reader.readByte() else {
+                        throw ParseError.truncated(offset: reader.position, context: "compact activity sample")
+                    }
                     pending!.heartRate = Int(heartRate)
                     pending!.isActive = (caloriesRaw & 0x40) == 0x40
                     pending!.calories = Int(caloriesRaw & 0x3F)
@@ -184,10 +223,14 @@ struct ActivityParser {
                     continue
                 }
 
-                if reader.position > file.count - 4 { continue }
+                if reader.position > contentEnd {
+                    throw ParseError.invalidTermination(offset: reader.position)
+                }
 
                 guard let varLo = reader.readByte(), let varHi = reader.readByte(),
-                      let heartRate = reader.readByte(), let caloriesRaw = reader.readByte() else { return }
+                      let heartRate = reader.readByte(), let caloriesRaw = reader.readByte() else {
+                    throw ParseError.truncated(offset: reader.position, context: "activity sample")
+                }
                 ensurePending()
                 parseVariability(lower: Int(varLo), higher: Int(varHi), into: &pending!)
                 pending!.heartRate = Int(heartRate)
@@ -196,39 +239,68 @@ struct ActivityParser {
                 finishPending()
 
             case 0xC2:
-                guard reader.skip(3) else { return }
+                guard reader.skip(3) else {
+                    throw ParseError.truncated(offset: reader.position, context: "C2 record")
+                }
 
             case 0xE2:
-                guard reader.skip(9) else { return }
+                guard reader.skip(9) else {
+                    throw ParseError.truncated(offset: reader.position, context: "E2 record")
+                }
                 if let probe = reader.peek(0), !Self.isMarker(probe) {
-                    guard reader.skip(6) else { return }
+                    guard reader.skip(6) else {
+                        throw ParseError.truncated(offset: reader.position, context: "E2 extension")
+                    }
                 }
 
             case 0xE0:
-                parseWorkoutSummary(&reader)
+                try parseWorkoutSummary(&reader)
 
             case 0xDD:
-                guard reader.skip(20) else { return }
+                guard reader.skip(20) else {
+                    throw ParseError.truncated(offset: reader.position, context: "DD record")
+                }
 
             case 0xD6:
-                guard reader.skip(1), let spo2 = reader.readByte() else { return }
+                guard reader.skip(1), let spo2 = reader.readByte() else {
+                    throw ParseError.truncated(offset: reader.position, context: "D6 SpO2 record")
+                }
                 spo2Samples.append(SpO2Sample(timestamp: currentTimestamp, value: Int(spo2)))
 
             case 0xCB, 0xCC, 0xCF:
-                guard reader.skip(1) else { return }
+                guard reader.skip(1) else {
+                    throw ParseError.truncated(offset: reader.position, context: "short marker record")
+                }
+
+            case 0x00:
+                // Captured files use zero padding between the last record and
+                // the container CRC. Padding is a legitimate terminator only
+                // when every remaining content byte is also zero.
+                guard reader.data[reader.position..<contentEnd].allSatisfy({ $0 == 0 }) else {
+                    throw ParseError.invalidRecord(offset: markerOffset, marker: next)
+                }
+                guard reader.skip(contentEnd - reader.position) else {
+                    throw ParseError.invalidTermination(offset: reader.position)
+                }
 
             default:
-                break
+                throw ParseError.invalidRecord(offset: markerOffset, marker: next)
             }
+        }
+        guard reader.position == contentEnd else {
+            throw ParseError.invalidTermination(offset: reader.position)
         }
     }
 
-    private mutating func parseWorkoutSummary(_ reader: inout ByteReader) {
+    private mutating func parseWorkoutSummary(_ reader: inout ByteReader) throws {
         var summary = WorkoutSummary(kind: "Activity", startTimestamp: 0, endTimestamp: 0)
         var duration = 0
         for _ in 0..<14 {
             guard let attributeId = reader.readByte(), let size = reader.readByte(),
-                  reader.position + Int(size) <= reader.data.count else { return }
+                  reader.position + Int(size) <= reader.limit else {
+                throw ParseError.invalidWorkout(offset: reader.position,
+                                                context: "truncated attribute")
+            }
             let info = reader.data.slice(reader.position, Int(size))
             _ = reader.skip(Int(size))
             // The watch stores all-0xFF for attributes it didn't record
@@ -329,21 +401,22 @@ struct ActivityParser {
 struct ByteReader {
     let data: Data
     var position: Int
+    let limit: Int
 
     mutating func readByte() -> UInt8? {
-        guard position < data.count else { return nil }
+        guard position < limit else { return nil }
         defer { position += 1 }
         return data.u8(at: position)
     }
 
     mutating func readU16LE() -> UInt16? {
-        guard position + 2 <= data.count else { return nil }
+        guard position + 2 <= limit else { return nil }
         defer { position += 2 }
         return data.u16LE(at: position)
     }
 
     mutating func readU32LE() -> UInt32? {
-        guard position + 4 <= data.count else { return nil }
+        guard position + 4 <= limit else { return nil }
         defer { position += 4 }
         return data.u32LE(at: position)
     }
@@ -353,13 +426,13 @@ struct ByteReader {
     /// past the end — returns nil rather than trapping.
     func peek(_ offset: Int) -> UInt8? {
         let index = position + offset
-        guard index >= 0, index < data.count else { return nil }
+        guard index >= 0, index < limit else { return nil }
         return data.u8(at: index)
     }
 
     mutating func skip(_ count: Int) -> Bool {
-        guard position + count <= data.count else {
-            position = data.count
+        guard count >= 0, position + count <= limit else {
+            position = limit
             return false
         }
         position += count

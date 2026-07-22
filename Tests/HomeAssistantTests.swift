@@ -50,13 +50,21 @@ final class HomeAssistantTests: XCTestCase {
         XCTAssertThrowsError(try HomeAssistantSettingsStore.normalizedBaseURL("http://homeassistant.local:8123")) {
             XCTAssertEqual($0 as? HomeAssistantError, .insecureHTTPNotAllowed)
         }
+        XCTAssertThrowsError(try HomeAssistantSettingsStore.normalizedBaseURL(
+            "http://homeassistant.local:8123", allowsInsecureHTTP: true))
         XCTAssertEqual(
             try HomeAssistantSettingsStore.normalizedBaseURL(
-                "http://homeassistant.local:8123", allowsInsecureHTTP: true).absoluteString,
-            "http://homeassistant.local:8123"
+                "http://192.168.1.20:8123", allowsInsecureHTTP: true).absoluteString,
+            "http://192.168.1.20:8123"
         )
         XCTAssertThrowsError(try HomeAssistantSettingsStore.normalizedBaseURL(
             "http://example.com", allowsInsecureHTTP: true))
+        XCTAssertThrowsError(try HomeAssistantSettingsStore.normalizedBaseURL(
+            "http://10.attacker.example", allowsInsecureHTTP: true))
+        XCTAssertThrowsError(try HomeAssistantSettingsStore.normalizedBaseURL(
+            "http://10.0.0.999", allowsInsecureHTTP: true))
+        XCTAssertThrowsError(try HomeAssistantSettingsStore.normalizedBaseURL(
+            "http://8.8.8.8", allowsInsecureHTTP: true))
     }
 
     func testConfigurationCapsWatchCarouselAtElevenEntities() throws {
@@ -68,6 +76,18 @@ final class HomeAssistantTests: XCTestCase {
 
         XCTAssertEqual(HomeAssistantSettingsStore.maximumEntities, 11)
         XCTAssertEqual(configuration.selectedEntityIDs, Array(selected.prefix(11)))
+    }
+
+    func testRedirectPolicyRejectsDowngradeAndCrossOrigin() throws {
+        let origin = try XCTUnwrap(URL(string: "https://ha.example.test:8443/api/states"))
+        XCTAssertTrue(HomeAssistantRedirectDelegate.permitsRedirect(
+            from: origin, to: try XCTUnwrap(URL(string: "https://ha.example.test:8443/login"))))
+        XCTAssertFalse(HomeAssistantRedirectDelegate.permitsRedirect(
+            from: origin, to: try XCTUnwrap(URL(string: "http://ha.example.test:8443/login"))))
+        XCTAssertFalse(HomeAssistantRedirectDelegate.permitsRedirect(
+            from: origin, to: try XCTUnwrap(URL(string: "https://evil.example:8443/login"))))
+        XCTAssertFalse(HomeAssistantRedirectDelegate.permitsRedirect(
+            from: origin, to: try XCTUnwrap(URL(string: "https://ha.example.test/login"))))
     }
 
     func testStateMappingProducesCompactWatchEntity() throws {

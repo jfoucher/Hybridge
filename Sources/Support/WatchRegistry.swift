@@ -3,7 +3,7 @@ import Foundation
 /// One watch the app knows about. The protocol never exposes a serial
 /// number, so the CoreBluetooth peripheral UUID is the per-unit identity —
 /// it keys the keychain entry and settings that truly belong to one watch.
-struct KnownWatch: Codable, Identifiable, Equatable {
+struct KnownWatch: Codable, Identifiable, Equatable, Sendable {
     let id: UUID
     var name: String
     var modelNumber: String?
@@ -14,6 +14,9 @@ struct KnownWatch: Codable, Identifiable, Equatable {
     /// detected yet" and is treated as Hybrid HR.
     var kind: WatchKind?
     var firmware: String?
+    /// Explicit enrollment trust. nil is a roster written by an older build;
+    /// those watches were also added by a user gesture and remain trusted.
+    var trusted: Bool?
 }
 
 extension Notification.Name {
@@ -26,7 +29,7 @@ extension Notification.Name {
 /// source of truth (it is thread-safe, and WatchManager reads on bleQueue
 /// via the *Sync helpers); the @Published mirrors are for SwiftUI and are
 /// updated on main.
-final class WatchRegistry: ObservableObject {
+final class WatchRegistry: ObservableObject, @unchecked Sendable {
     static let shared: WatchRegistry = {
         // Whichever singleton is touched first (this or WatchManager) runs
         // the one-time migration before reading any migrated key.
@@ -36,6 +39,8 @@ final class WatchRegistry: ObservableObject {
 
     static let watchesKey = "knownWatches"
     static let activeKey = "activeWatchID"
+    static let previousValidWatchesKey = "knownWatches.previousValid"
+    static let corruptWatchesPrefix = "knownWatches.corrupt."
 
     @Published private(set) var watches: [KnownWatch]
     @Published private(set) var activeWatchID: UUID?
@@ -45,6 +50,7 @@ final class WatchRegistry: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        Self.recoverCorruptRosterIfNeeded(in: defaults)
         watches = Self.decodeWatches(from: defaults)
         activeWatchID = Self.decodeActiveID(from: defaults)
     }
@@ -68,7 +74,7 @@ final class WatchRegistry: ObservableObject {
             } else {
                 registered = KnownWatch(id: id, name: name, modelNumber: nil,
                                         addedDate: Date(), lastConnectedDate: nil,
-                                        kind: nil, firmware: nil)
+                                        kind: nil, firmware: nil, trusted: true)
                 list.append(registered)
             }
         }
@@ -150,22 +156,56 @@ final class WatchRegistry: ObservableObject {
     private func mutate(_ change: (inout [KnownWatch]) -> Void) {
         lock.lock()
         var list = Self.decodeWatches(from: defaults)
+        if let current = defaults.data(forKey: Self.watchesKey),
+           (try? JSONDecoder().decode([KnownWatch].self, from: current)) != nil {
+            defaults.set(current, forKey: Self.previousValidWatchesKey)
+        }
         change(&list)
         if let data = try? JSONEncoder().encode(list) {
             defaults.set(data, forKey: Self.watchesKey)
+            if let committed = defaults.data(forKey: Self.watchesKey),
+               (try? JSONDecoder().decode([KnownWatch].self, from: committed)) == list {
+                defaults.set(committed, forKey: Self.previousValidWatchesKey)
+            }
         }
         lock.unlock()
-        onMain { self.watches = list }
+        let publishedList = list
+        onMain { self.watches = publishedList }
     }
 
-    private func onMain(_ update: @escaping () -> Void) {
+    private func onMain(_ update: @escaping @Sendable () -> Void) {
         if Thread.isMainThread { update() } else { DispatchQueue.main.async(execute: update) }
     }
 
     private static func decodeWatches(from defaults: UserDefaults) -> [KnownWatch] {
-        guard let data = defaults.data(forKey: watchesKey),
-              let list = try? JSONDecoder().decode([KnownWatch].self, from: data) else { return [] }
-        return list
+        if let data = defaults.data(forKey: watchesKey),
+           let list = try? JSONDecoder().decode([KnownWatch].self, from: data) {
+            return list
+        }
+        if let data = defaults.data(forKey: previousValidWatchesKey),
+           let list = try? JSONDecoder().decode([KnownWatch].self, from: data) {
+            return list
+        }
+        return []
+    }
+
+    /// UserDefaults writes are atomic, but decoding can still fail after a
+    /// schema bug or damaged restore. Preserve the bad bytes for support and
+    /// restore the last verified roster rather than presenting an empty app
+    /// that can overwrite the only watch/key mapping.
+    private static func recoverCorruptRosterIfNeeded(in defaults: UserDefaults) {
+        guard let current = defaults.data(forKey: watchesKey),
+              (try? JSONDecoder().decode([KnownWatch].self, from: current)) == nil
+        else { return }
+        let stamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        defaults.set(current, forKey: corruptWatchesPrefix + stamp)
+        if let previous = defaults.data(forKey: previousValidWatchesKey),
+           (try? JSONDecoder().decode([KnownWatch].self, from: previous)) != nil {
+            defaults.set(previous, forKey: watchesKey)
+        } else {
+            defaults.removeObject(forKey: watchesKey)
+        }
     }
 
     private static func decodeActiveID(from defaults: UserDefaults) -> UUID? {

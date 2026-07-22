@@ -65,7 +65,7 @@ private struct QuietOverride: Codable {
 /// Keeps the watch's notification filter in sync with the user's quiet-hours
 /// schedule. The schedule and manual override are global preferences; the
 /// last applied mode remains per-watch so every watch receives the filter.
-final class QuietHoursManager {
+final class QuietHoursManager: @unchecked Sendable {
     static let shared = QuietHoursManager()
 
     private let defaults: UserDefaults
@@ -75,7 +75,9 @@ final class QuietHoursManager {
     }
 
     private func globalKey(_ base: WatchScopedKey) -> String { base.rawValue }
-    private func appliedKey() -> String { WatchScoped.key(.quietModeApplied) }
+    private func appliedKey(watchID: UUID?) -> String {
+        WatchScoped.key(.quietModeApplied, watchID: watchID)
+    }
 
     var schedule: QuietSchedule {
         get {
@@ -121,15 +123,18 @@ final class QuietHoursManager {
     /// logged, not thrown — the next evaluation (init/maintenance/foreground)
     /// retries.
     func evaluate() async {
+        let watch = WatchManager.shared
+        guard let token = WatchSession.connectionToken ?? watch.connectionTokenSync(),
+              watch.validatesConnectionToken(token) else { return }
         let desired = effectiveMode
-        let applied = defaults.string(forKey: appliedKey()).flatMap(QuietMode.init(rawValue:))
+        let key = appliedKey(watchID: token.watchID)
+        let applied = defaults.string(forKey: key).flatMap(QuietMode.init(rawValue:))
         guard desired != applied else { return }
-        let kind = WatchRegistry.activeKindSync()
+        let kind = token.kind
         guard kind.hasQuietHours else {
             WatchManager.shared.addLog("Quiet hours: unavailable for this watch in release builds pending hardware validation")
             return
         }
-        let watch = WatchManager.shared
         let ready = await MainActor.run { watch.connectionState == .ready }
         // Don't pile onto a running init — unless we *are* the init sequence.
         // Both family inits call this near their tail (so a watch reconnecting
@@ -140,12 +145,18 @@ final class QuietHoursManager {
         // condition the flag was standing in for.
         guard ready, !WatchManager.initInProgress || WatchSession.isHeld else { return }
         do {
-            if kind == .fossilQ {
-                try await watch.setQNotificationFilter(night: desired == .night)
-            } else {
-                try await watch.setNotificationFilter(night: desired == .night)
+            try await WatchSession.exclusive(for: token) {
+                guard watch.validatesConnectionToken(token) else {
+                    throw FossilError.staleConnection
+                }
+                if kind == .fossilQ {
+                    try await watch.setQNotificationFilter(night: desired == .night)
+                } else {
+                    try await watch.setNotificationFilter(night: desired == .night)
+                }
             }
-            defaults.set(desired.rawValue, forKey: appliedKey())
+            guard watch.validatesConnectionToken(token) else { return }
+            defaults.set(desired.rawValue, forKey: key)
             watch.addLog("Quiet hours: switched to \(desired.rawValue)")
         } catch {
             watch.addLog("Quiet hours: filter push failed: \(error.localizedDescription)")
@@ -164,7 +175,10 @@ final class QuietHoursManager {
     /// currently active. Init calls `evaluate()` immediately afterwards; other
     /// callers get it on the next maintenance/foreground tick.
     func noteDayFilterApplied() {
-        defaults.set(QuietMode.day.rawValue, forKey: appliedKey())
+        let watchID = WatchSession.connectionToken?.watchID
+            ?? WatchManager.shared.connectionTokenSync()?.watchID
+            ?? WatchRegistry.activeWatchIDSync()
+        defaults.set(QuietMode.day.rawValue, forKey: appliedKey(watchID: watchID))
     }
 
     private func loadOverride() -> QuietOverride? {

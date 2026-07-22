@@ -45,7 +45,7 @@ jobs:
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Verify Xcode version
         run: |
@@ -53,7 +53,7 @@ jobs:
           test "$(xcodebuild -version | sed -n '1s/^Xcode //p')" = "26.6"
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: scripts/install_xcodegen.sh
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -62,6 +62,19 @@ jobs:
       # prevents the protected TestFlight environment from being entered.
       - name: Run unit tests
         run: scripts/xbuild.sh test
+
+      - name: Build Release
+        run: scripts/xbuild.sh build
+        env:
+          XBUILD_CONFIGURATION: Release
+
+      - name: Analyze Release
+        run: scripts/xbuild.sh analyze
+        env:
+          XBUILD_CONFIGURATION: Release
+
+      - name: Validate manifests, capabilities, metadata, and secrets
+        run: scripts/release_checks.sh
 
   release:
     name: Archive & upload
@@ -73,7 +86,7 @@ jobs:
       MARKETING_VERSION: ${{ needs.validate_tag.outputs.marketing_version }}
       BUILD_NUMBER: ${{ needs.validate_tag.outputs.build_number }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
 
       - name: Verify Xcode version
         run: |
@@ -81,7 +94,7 @@ jobs:
           test "$(xcodebuild -version | sed -n '1s/^Xcode //p')" = "26.6"
 
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: scripts/install_xcodegen.sh
 
       - name: Generate Xcode project
         run: xcodegen generate
@@ -243,7 +256,7 @@ jobs:
             -authenticationKeyIssuerID "$API_ISSUER_ID"
 
       - name: Retain signed release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: Hybridge-${{ env.MARKETING_VERSION }}-${{ env.BUILD_NUMBER }}
           path: ${{ env.ARTIFACT_PATH }}

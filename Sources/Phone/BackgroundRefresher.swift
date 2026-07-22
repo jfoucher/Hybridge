@@ -2,6 +2,12 @@ import Foundation
 import BackgroundTasks
 import os.log
 
+protocol BackgroundTaskCompleting: AnyObject {
+    func setTaskCompleted(success: Bool)
+}
+
+extension BGAppRefreshTask: BackgroundTaskCompleting {}
+
 /// Drives a periodic `BGAppRefreshTask` so activity/battery data (and the
 /// low-battery alert, and the home-screen widgets that read it) stay fresh
 /// without the user opening the app. Reuses the exact machinery a foreground
@@ -14,7 +20,7 @@ import os.log
 /// Platform limitation: if the user swipe-kills the app, iOS launches it for
 /// neither BLE restoration events nor a `BGAppRefreshTask` until the next
 /// manual launch. There is no workaround.
-final class BackgroundRefresher {
+final class BackgroundRefresher: @unchecked Sendable {
     static let shared = BackgroundRefresher()
 
     static let identifier = "eu.sixpixels.hybridge.refresh"
@@ -58,26 +64,25 @@ final class BackgroundRefresher {
 
     private func handle(_ task: BGAppRefreshTask) {
         let completion = CompletionGuard(task: task)
+        let work = BackgroundWorkGuard()
         task.expirationHandler = {
-            // Don't tear down the in-flight request: bluetooth-central keeps
-            // waking the process for its pending notifications, so a
-            // truncated sync often finishes organically after suspension —
-            // and even a hard truncation is lossless (syncActivity only
-            // deletes the on-watch file after a successful merge).
+            work.cancel()
             completion.complete(success: false)
         }
         // First thing, per Apple's recommended pattern — keeps the chain
         // alive even across expired runs.
         scheduleNext()
-        Task {
+        work.set(Task {
             let success = await self.run()
+            guard !Task.isCancelled else { return }
             await MainActor.run { WidgetBridge.shared.flushNow() }
             completion.complete(success: success)
-        }
+        })
     }
 
     /// Budget ~30s of background execution.
     private func run() async -> Bool {
+        guard !Task.isCancelled else { return false }
         // On a fresh BG launch this creates the CBCentralManager and kicks
         // off state restoration → reconnect → family init on its own.
         let watch = WatchManager.shared
@@ -94,7 +99,11 @@ final class BackgroundRefresher {
         if !isReady {
             guard await watch.waitUntilReady(timeout: 20) else { return false }
         }
+        guard !Task.isCancelled,
+              WatchRegistry.activeWatchIDSync() == watchID else { return false }
         _ = await watch.waitUntilIdle(timeout: 15)
+        guard !Task.isCancelled,
+              WatchRegistry.activeWatchIDSync() == watchID else { return false }
 
         await watch.periodicMaintenance()
         await watch.syncActivityIfDue()
@@ -121,14 +130,34 @@ final class BackgroundRefresher {
     }
 }
 
+private final class BackgroundWorkGuard: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<Void, Never>?
+    private var expired = false
+
+    func set(_ task: Task<Void, Never>) {
+        lock.withLock {
+            if expired { task.cancel() } else { self.task = task }
+        }
+    }
+
+    func cancel() {
+        lock.withLock {
+            expired = true
+            task?.cancel()
+            task = nil
+        }
+    }
+}
+
 /// Arbitrates a single call to `setTaskCompleted` — the expiration handler and
 /// the normal completion path can race.
-private final class CompletionGuard {
-    private let task: BGAppRefreshTask
+final class CompletionGuard: @unchecked Sendable {
+    private let task: BackgroundTaskCompleting
     private let lock = NSLock()
     private var completed = false
 
-    init(task: BGAppRefreshTask) { self.task = task }
+    init(task: BackgroundTaskCompleting) { self.task = task }
 
     func complete(success: Bool) {
         lock.lock()

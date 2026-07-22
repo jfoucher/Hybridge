@@ -1,6 +1,99 @@
 import Foundation
 import HealthKit
 
+@MainActor
+protocol HealthStoreWriting: AnyObject {
+    var isHealthDataAvailable: Bool { get }
+    func requestAuthorization() async throws
+    func authorizationStatus(for type: HKObjectType) -> HKAuthorizationStatus
+    func save(_ samples: [HKSample]) async throws
+    func saveWorkout(_ workout: WorkoutSummary) async throws
+}
+
+@MainActor
+private final class LiveHealthStoreWriter: HealthStoreWriting {
+    private let store = HKHealthStore()
+    private let caloriesType = HKQuantityType(.activeEnergyBurned)
+
+    var isHealthDataAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
+
+    func requestAuthorization() async throws {
+        let types: Set<HKSampleType> = [
+            HKQuantityType(.stepCount), HKQuantityType(.heartRate), caloriesType,
+            HKQuantityType(.oxygenSaturation), HKCategoryType(.sleepAnalysis),
+            HKWorkoutType.workoutType(), HKQuantityType(.distanceWalkingRunning),
+            HKQuantityType(.distanceCycling),
+        ]
+        try await store.requestAuthorization(toShare: types, read: [])
+    }
+
+    func authorizationStatus(for type: HKObjectType) -> HKAuthorizationStatus {
+        store.authorizationStatus(for: type)
+    }
+
+    func save(_ samples: [HKSample]) async throws {
+        try await store.save(samples)
+    }
+
+    func saveWorkout(_ workout: WorkoutSummary) async throws {
+        let start = Date(timeIntervalSince1970: TimeInterval(workout.startTimestamp))
+        let end = Date(timeIntervalSince1970: TimeInterval(workout.endTimestamp))
+        let config = HKWorkoutConfiguration()
+        config.activityType = Self.activityType(for: workout.kind)
+        let builder = HKWorkoutBuilder(healthStore: store, configuration: config, device: nil)
+        try await builder.beginCollection(at: start)
+        try await builder.addMetadata(Self.metadata(
+            workout: workout, timestamp: workout.startTimestamp, kind: "workout"))
+
+        var samples: [HKSample] = []
+        if let distance = workout.distanceMeters, distance > 0 {
+            let distanceType = config.activityType == .cycling
+                ? HKQuantityType(.distanceCycling)
+                : HKQuantityType(.distanceWalkingRunning)
+            if authorizationStatus(for: distanceType) == .sharingAuthorized {
+                samples.append(HKQuantitySample(
+                    type: distanceType,
+                    quantity: HKQuantity(unit: .meter(), doubleValue: Double(distance)),
+                    start: start, end: end,
+                    metadata: Self.metadata(workout: workout,
+                                            timestamp: workout.startTimestamp, kind: "wdist")))
+            }
+        }
+        if authorizationStatus(for: caloriesType) == .sharingAuthorized,
+           let calories = workout.calories, calories > 0 {
+            samples.append(HKQuantitySample(
+                type: caloriesType,
+                quantity: HKQuantity(unit: .kilocalorie(), doubleValue: Double(calories)),
+                start: start, end: end,
+                metadata: Self.metadata(workout: workout,
+                                        timestamp: workout.startTimestamp, kind: "wkcal")))
+        }
+        if !samples.isEmpty { try await builder.addSamples(samples) }
+        try await builder.endCollection(at: end)
+        try await builder.finishWorkout()
+    }
+
+    private static func metadata(workout: WorkoutSummary, timestamp: Int,
+                                 kind: String) -> [String: Any] {
+        [HKMetadataKeySyncIdentifier:
+            "hybridge.\(workout.watchID?.uuidString ?? "legacy").\(kind).\(timestamp)",
+         HKMetadataKeySyncVersion: 1]
+    }
+
+    private static func activityType(for kind: String) -> HKWorkoutActivityType {
+        switch kind {
+        case "Running", "Treadmill": return .running
+        case "Cycling", "Spinning": return .cycling
+        case "Cross trainer": return .crossTraining
+        case "Weightlifting": return .traditionalStrengthTraining
+        case "Walking": return .walking
+        case "Rowing machine": return .rowing
+        case "Hiking": return .hiking
+        default: return .other
+        }
+    }
+}
+
 /// Writes synced watch samples into Apple Health. Only samples newer than the
 /// last export are written, so repeated exports don't duplicate.
 @MainActor
@@ -8,11 +101,12 @@ final class HealthKitExporter: ObservableObject {
     static let shared = HealthKitExporter()
 
     @Published var lastExportDate: Date? {
-        didSet { UserDefaults.standard.set(lastExportDate, forKey: Self.lastExportKey) }
+        didSet { defaults.set(lastExportDate, forKey: Self.lastExportKey) }
     }
-    @Published var isAvailable = HKHealthStore.isHealthDataAvailable()
+    @Published var isAvailable: Bool
 
-    private let store = HKHealthStore()
+    private let store: any HealthStoreWriting
+    private let defaults: UserDefaults
     private static let lastExportKey = "healthLastExport"
     private static let exportedRangesKey = "healthExportedRanges"
 
@@ -44,9 +138,13 @@ final class HealthKitExporter: ObservableObject {
     /// reentrancy at HealthKit `await` points from starting a second export.
     private var activeExport: Task<Int, Error>?
 
-    init() {
-        lastExportDate = UserDefaults.standard.object(forKey: Self.lastExportKey) as? Date
-        if let data = UserDefaults.standard.data(forKey: Self.exportedRangesKey),
+    init(store: (any HealthStoreWriting)? = nil, defaults: UserDefaults = .standard) {
+        let store = store ?? LiveHealthStoreWriter()
+        self.store = store
+        self.defaults = defaults
+        self.isAvailable = store.isHealthDataAvailable
+        lastExportDate = defaults.object(forKey: Self.lastExportKey) as? Date
+        if let data = defaults.data(forKey: Self.exportedRangesKey),
            let decoded = try? JSONDecoder().decode([String: [ExportedRange]].self, from: data) {
             exportedRanges = decoded
         } else if let lastExport = lastExportDate {
@@ -131,7 +229,7 @@ final class HealthKitExporter: ObservableObject {
 
     private func persistExportedRanges() {
         guard let data = try? JSONEncoder().encode(exportedRanges) else { return }
-        UserDefaults.standard.set(data, forKey: Self.exportedRangesKey)
+        defaults.set(data, forKey: Self.exportedRangesKey)
     }
 
     /// Stable identity for a written sample. HealthKit replaces rather than
@@ -144,33 +242,16 @@ final class HealthKitExporter: ObservableObject {
     }
 
     func requestAuthorization() async throws {
-        let types: Set<HKSampleType> = [stepsType, heartRateType, caloriesType, spo2Type,
-                                        sleepType, HKWorkoutType.workoutType(),
-                                        HKQuantityType(.distanceWalkingRunning),
-                                        HKQuantityType(.distanceCycling)]
-        try await store.requestAuthorization(toShare: types, read: [])
+        try await store.requestAuthorization()
     }
 
-    /// Whether every type we write is already authorized, so an export can
+    /// Whether at least one type is already authorized, so a background
     /// run without HealthKit presenting its permission sheet — the gate for
     /// exporting from a background task, where prompting is forbidden.
     var canExportWithoutPrompt: Bool {
         [stepsType, heartRateType, caloriesType, spo2Type, sleepType, HKWorkoutType.workoutType(),
          HKQuantityType(.distanceWalkingRunning), HKQuantityType(.distanceCycling)]
-            .allSatisfy { store.authorizationStatus(for: $0) == .sharingAuthorized }
-    }
-
-    nonisolated private static func workoutActivityType(for kind: String) -> HKWorkoutActivityType {
-        switch kind {
-        case "Running", "Treadmill": return .running
-        case "Cycling", "Spinning": return .cycling
-        case "Cross trainer": return .crossTraining
-        case "Weightlifting": return .traditionalStrengthTraining
-        case "Walking": return .walking
-        case "Rowing machine": return .rowing
-        case "Hiking": return .hiking
-        default: return .other
-        }
+            .contains { store.authorizationStatus(for: $0) == .sharingAuthorized }
     }
 
     /// Export everything newer than the last export. Returns sample count.
@@ -226,13 +307,16 @@ final class HealthKitExporter: ObservableObject {
         func note(_ timestamp: Int, _ watchID: UUID?) {
             covered[watchID?.uuidString ?? "legacy", default: []].append(timestamp)
         }
+        func authorized(_ type: HKSampleType) -> Bool {
+            store.authorizationStatus(for: type) == .sharingAuthorized
+        }
 
         for sample in snapshot.samples
         where !alreadyExported(sample.timestamp, watchID: sample.watchID) {
-            note(sample.timestamp, sample.watchID)
+            let initialCount = batch.count
             let start = Date(timeIntervalSince1970: TimeInterval(sample.timestamp))
             let end = start.addingTimeInterval(60)
-            if sample.stepCount > 0 {
+            if authorized(stepsType), sample.stepCount > 0 {
                 batch.append(HKQuantitySample(
                     type: stepsType,
                     quantity: HKQuantity(unit: .count(), doubleValue: Double(sample.stepCount)),
@@ -244,7 +328,7 @@ final class HealthKitExporter: ObservableObject {
             // (it accrues even at rest), so writing every sample into
             // activeEnergyBurned inflates Apple's Move ring — completing it while
             // idle. Only samples the watch flagged active count as active energy.
-            if sample.isActive && sample.calories > 0 {
+            if authorized(caloriesType), sample.isActive && sample.calories > 0 {
                 batch.append(HKQuantitySample(
                     type: caloriesType,
                     quantity: HKQuantity(unit: .kilocalorie(), doubleValue: Double(sample.calories)),
@@ -252,7 +336,7 @@ final class HealthKitExporter: ObservableObject {
                     metadata: Self.syncMetadata(watchID: sample.watchID,
                                                 timestamp: sample.timestamp, kind: "kcal")))
             }
-            if sample.hasValidHeartRate {
+            if authorized(heartRateType), sample.hasValidHeartRate {
                 batch.append(HKQuantitySample(
                     type: heartRateType,
                     quantity: HKQuantity(unit: HKUnit.count().unitDivided(by: .minute()),
@@ -261,6 +345,7 @@ final class HealthKitExporter: ObservableObject {
                     metadata: Self.syncMetadata(watchID: sample.watchID,
                                                 timestamp: sample.timestamp, kind: "hr")))
             }
+            if batch.count > initialCount { note(sample.timestamp, sample.watchID) }
             if batch.count >= chunkSize {
                 let saving = batch
                 batch.removeAll(keepingCapacity: true)
@@ -271,7 +356,7 @@ final class HealthKitExporter: ObservableObject {
 
         for sample in snapshot.spo2
         where !alreadyExported(sample.timestamp, watchID: sample.watchID) {
-            note(sample.timestamp, sample.watchID)
+            guard authorized(spo2Type) else { continue }
             guard sample.value > 0, sample.value <= 100 else { continue }
             let date = Date(timeIntervalSince1970: TimeInterval(sample.timestamp))
             batch.append(HKQuantitySample(
@@ -280,6 +365,7 @@ final class HealthKitExporter: ObservableObject {
                 start: date, end: date,
                 metadata: Self.syncMetadata(watchID: sample.watchID,
                                         timestamp: sample.timestamp, kind: "spo2")))
+            note(sample.timestamp, sample.watchID)
             if batch.count >= chunkSize {
                 let saving = batch
                 batch.removeAll(keepingCapacity: true)
@@ -295,6 +381,7 @@ final class HealthKitExporter: ObservableObject {
         var sleepCovered: [Int] = []
         for session in snapshot.sleepSessions
         where !alreadyExported(session.endTimestamp, watchID: nil) {
+            guard authorized(sleepType) else { continue }
             batch.append(HKCategorySample(
                 type: sleepType,
                 value: HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue,
@@ -311,10 +398,10 @@ final class HealthKitExporter: ObservableObject {
             }
         }
 
-        let workouts = snapshot.workouts.filter {
+        let workouts = authorized(HKWorkoutType.workoutType()) ? snapshot.workouts.filter {
             !alreadyExported($0.endTimestamp, watchID: $0.watchID)
                 && $0.endTimestamp > $0.startTimestamp
-        }
+        } : []
 
         guard !batch.isEmpty || savedSampleCount > 0 || !workouts.isEmpty else {
             lastExportDate = Date()
@@ -327,8 +414,10 @@ final class HealthKitExporter: ObservableObject {
             savedSampleCount += saving.count
         }
         for workout in workouts {
-            try await export(workout: workout)
-            note(workout.endTimestamp, workout.watchID)
+            try await store.saveWorkout(workout)
+            // Checkpoint each successful workout immediately. If a later
+            // builder fails, this one remains repeat-safe on the next run.
+            markExported(timestamps: [workout.endTimestamp], watchID: workout.watchID)
         }
         // Only after the writes land — a throw above leaves the ranges
         // untouched so the next run retries instead of skipping.
@@ -351,41 +440,4 @@ final class HealthKitExporter: ObservableObject {
         var sleepSessions: [FitnessStore.SleepSession]
     }
 
-    /// Writes one watch workout (parsed from the 0xE0 activity-file summary)
-    /// as an HKWorkout with its distance/energy totals when recorded.
-    private func export(workout: WorkoutSummary) async throws {
-        let start = Date(timeIntervalSince1970: TimeInterval(workout.startTimestamp))
-        let end = Date(timeIntervalSince1970: TimeInterval(workout.endTimestamp))
-
-        let config = HKWorkoutConfiguration()
-        config.activityType = Self.workoutActivityType(for: workout.kind)
-        let builder = HKWorkoutBuilder(healthStore: store, configuration: config, device: nil)
-        try await builder.beginCollection(at: start)
-
-        var samples: [HKSample] = []
-        if let distance = workout.distanceMeters, distance > 0 {
-            let distanceType = config.activityType == .cycling
-                ? HKQuantityType(.distanceCycling)
-                : HKQuantityType(.distanceWalkingRunning)
-            samples.append(HKQuantitySample(
-                type: distanceType,
-                quantity: HKQuantity(unit: .meter(), doubleValue: Double(distance)),
-                start: start, end: end,
-                metadata: Self.syncMetadata(watchID: workout.watchID,
-                                            timestamp: workout.startTimestamp, kind: "wdist")))
-        }
-        if let calories = workout.calories, calories > 0 {
-            samples.append(HKQuantitySample(
-                type: caloriesType,
-                quantity: HKQuantity(unit: .kilocalorie(), doubleValue: Double(calories)),
-                start: start, end: end,
-                metadata: Self.syncMetadata(watchID: workout.watchID,
-                                            timestamp: workout.startTimestamp, kind: "wkcal")))
-        }
-        if !samples.isEmpty {
-            try await builder.addSamples(samples)
-        }
-        try await builder.endCollection(at: end)
-        try await builder.finishWorkout()
-    }
 }

@@ -1,6 +1,19 @@
 import Foundation
 import EventKit
 
+protocol CalendarPayloadSending: Sendable {
+    func sendCalendarPayload(_ payload: Data,
+                             token: WatchConnectionToken) async -> Bool
+}
+
+extension WatchManager: CalendarPayloadSending {
+    func sendCalendarPayload(_ payload: Data,
+                             token: WatchConnectionToken) async -> Bool {
+        guard validatesConnectionToken(token) else { return false }
+        return await pushJsonWhenIdle(payload, expectedToken: token)
+    }
+}
+
 /// Calendar → watch push (GB: FossilHRWatchAdapter.java:1642-1715). A single
 /// fire-and-forget JSON push (no req/ack cycle) to whichever app config key
 /// consumes `_.config.events` — the stock watchface uses `customWatchFace`.
@@ -8,8 +21,10 @@ import EventKit
 final class CalendarSync: NSObject, ObservableObject {
     static let shared = CalendarSync()
 
-    private static let enabledKey = "calendarSyncEnabled"
-    private static let lastSyncedHashKey = "calendarSyncLastHash"
+    nonisolated private static let enabledKey = "calendarSyncEnabled"
+    nonisolated private static let lastSyncedHashKey = "calendarSyncLastHash"
+    nonisolated private static let lastFailedAttemptKey = "calendarSyncLastFailure"
+    nonisolated static let payloadSchema = 1
     nonisolated static let maxEvents = 5
     nonisolated static let lookaheadDays = 7
     nonisolated static let maxFieldLength = 40
@@ -22,9 +37,15 @@ final class CalendarSync: NSObject, ObservableObject {
     }
 
     private let store = EKEventStore()
+    private let sender: CalendarPayloadSending
     private var observing = false
 
-    private override init() {
+    private override convenience init() {
+        self.init(sender: WatchManager.shared)
+    }
+
+    init(sender: CalendarPayloadSending) {
+        self.sender = sender
         super.init()
         if isEnabled { observeChanges() }
     }
@@ -66,16 +87,53 @@ final class CalendarSync: NSObject, ObservableObject {
     }
 
     private func sync() async {
+        guard let token = WatchManager.shared.connectionTokenSync(),
+              WatchManager.shared.validatesConnectionToken(token) else { return }
         let events = fetchUpcomingEvents()
         let hash = Self.dedupeKey(for: events)
-        guard UserDefaults.standard.object(forKey: Self.lastSyncedHashKey) as? Int != hash else {
+        let deliveryKey = Self.deliveryKey(for: token.watchID)
+        guard UserDefaults.standard.object(forKey: deliveryKey) as? Int != hash else {
             lastSyncDate = Date()
             return
         }
-        await WatchManager.shared.pushJsonWhenIdle(JsonPayloads.calendarEventsPush(events))
-        UserDefaults.standard.set(hash, forKey: Self.lastSyncedHashKey)
+        let sent = await sender.sendCalendarPayload(
+            JsonPayloads.calendarEventsPush(events), token: token)
+        guard Self.commitDelivery(hash: hash, watchID: token.watchID, sent: sent,
+                                  tokenStillValid: WatchManager.shared.validatesConnectionToken(token)) else {
+            WatchManager.shared.addLog("Calendar: delivery failed; will retry")
+            return
+        }
         lastSyncDate = Date()
         WatchManager.shared.addLog("Calendar: pushed \(events.count) event(s)")
+    }
+
+    nonisolated static func deliveryKey(for watchID: UUID) -> String {
+        "\(lastSyncedHashKey).v\(payloadSchema).\(watchID.uuidString)"
+    }
+
+    nonisolated static func failureKey(for watchID: UUID) -> String {
+        "\(lastFailedAttemptKey).v\(payloadSchema).\(watchID.uuidString)"
+    }
+
+    nonisolated static func invalidateDelivery(for watchID: UUID) {
+        UserDefaults.standard.removeObject(forKey: deliveryKey(for: watchID))
+    }
+
+    /// Transaction boundary kept independent of EventKit/CoreBluetooth so a
+    /// failed send or stale post-await token can be regression-tested without
+    /// either system framework. Only an acknowledged, still-authorized send
+    /// advances the per-watch/schema delivery marker.
+    @discardableResult
+    nonisolated static func commitDelivery(hash: Int, watchID: UUID, sent: Bool,
+                                           tokenStillValid: Bool,
+                                           defaults: UserDefaults = .standard) -> Bool {
+        guard sent, tokenStillValid else {
+            defaults.set(Date(), forKey: failureKey(for: watchID))
+            return false
+        }
+        defaults.set(hash, forKey: deliveryKey(for: watchID))
+        defaults.removeObject(forKey: failureKey(for: watchID))
+        return true
     }
 
     private func fetchUpcomingEvents() -> [CalendarEventPayload] {

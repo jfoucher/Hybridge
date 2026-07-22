@@ -86,7 +86,9 @@ struct WappBuilder {
         let generated = CustomFaceLayout.generate(for: design)
         // Too many layout nodes make the firmware render a blank screen — fail
         // clearly at build time rather than shipping a face that won't display.
+        #if DEBUG
         print("face has \(generated.layout.count) nodes")
+        #endif
         guard generated.layout.count <= CustomFaceLayout.maxNodes else {
             throw WappError.tooManyElements
         }

@@ -79,9 +79,7 @@ enum WidgetCatalog {
         "widgetWeather", "widgetChanceOfRain", "widgetUV",
     ]
 
-    static var availableEntries: [Entry] {
-        HardwareValidation.watchWeather ? entries : entries.filter { !weatherTypes.contains($0.type) }
-    }
+    static var availableEntries: [Entry] { entries }
 
     static func isWeather(_ type: String) -> Bool {
         weatherTypes.contains(type)
@@ -172,11 +170,7 @@ enum WatchfaceValueSource: String, Codable, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
-    static var availableCases: [Self] {
-        HardwareValidation.watchWeather
-            ? allCases
-            : allCases.filter { !$0.isWeather }
-    }
+    static var availableCases: [Self] { allCases }
 
     var isWeather: Bool {
         switch self {
@@ -437,17 +431,65 @@ enum WatchfaceStore {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("watchfaces.json")
     }
-
-    static func load() -> [WatchfaceDesign] {
-        guard let data = try? Data(contentsOf: fileURL),
-              let designs = try? JSONDecoder().decode([WatchfaceDesign].self, from: data)
-        else { return [] }
-        return designs
+    private static var previousValidURL: URL {
+        fileURL.deletingLastPathComponent().appendingPathComponent("watchfaces.previous-valid.json")
     }
 
-    static func save(_ designs: [WatchfaceDesign]) {
-        if let data = try? JSONEncoder().encode(designs) {
-            try? data.write(to: fileURL, options: .atomic)
+    static func load() -> [WatchfaceDesign] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+        do {
+            let data = try Data(contentsOf: fileURL)
+            let designs = try JSONDecoder().decode([WatchfaceDesign].self, from: data)
+            try? data.write(to: previousValidURL, options: [.atomic, .completeFileProtection])
+            excludeFromBackup(previousValidURL)
+            return designs
+        } catch {
+            let stamp = ISO8601DateFormatter().string(from: Date())
+                .replacingOccurrences(of: ":", with: "-")
+            let quarantine = fileURL.deletingLastPathComponent()
+                .appendingPathComponent("watchfaces.corrupt-\(stamp).json")
+            try? FileManager.default.moveItem(at: fileURL, to: quarantine)
+            NSLog("WatchfaceStore: preserved unreadable designs as \(quarantine.lastPathComponent): \(error)")
+            guard let previous = try? Data(contentsOf: previousValidURL),
+                  let recovered = try? JSONDecoder().decode(
+                    [WatchfaceDesign].self, from: previous) else { return [] }
+            NSLog("WatchfaceStore: restored the last verified design index")
+            return recovered
         }
+    }
+
+    static func loadAsync() async -> [WatchfaceDesign] {
+        await Task.detached(priority: .utility) { load() }.value
+    }
+
+    @discardableResult
+    static func save(_ designs: [WatchfaceDesign]) -> Bool {
+        do {
+            let data = try JSONEncoder().encode(designs)
+            try data.write(to: fileURL, options: [.atomic, .completeFileProtection])
+            let committed = try Data(contentsOf: fileURL)
+            guard (try JSONDecoder().decode([WatchfaceDesign].self, from: committed)) == designs else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            try? committed.write(to: previousValidURL,
+                                 options: [.atomic, .completeFileProtection])
+            excludeFromBackup(fileURL)
+            excludeFromBackup(previousValidURL)
+            return true
+        } catch {
+            NSLog("WatchfaceStore: save failed: \(error)")
+            return false
+        }
+    }
+
+    static func saveAsync(_ designs: [WatchfaceDesign]) async -> Bool {
+        await Task.detached(priority: .utility) { save(designs) }.value
+    }
+
+    private static func excludeFromBackup(_ candidate: URL) {
+        var url = candidate
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? url.setResourceValues(values)
     }
 }

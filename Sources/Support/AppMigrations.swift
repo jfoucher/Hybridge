@@ -30,7 +30,7 @@ enum AppMigrations {
 
         let watch = KnownWatch(id: id, name: String(localized: "My watch"), modelNumber: nil,
                                addedDate: Date(), lastConnectedDate: nil,
-                               kind: nil, firmware: nil)
+                               kind: nil, firmware: nil, trusted: true)
         if let data = try? JSONEncoder().encode([watch]) {
             defaults.set(data, forKey: WatchRegistry.watchesKey)
         }
