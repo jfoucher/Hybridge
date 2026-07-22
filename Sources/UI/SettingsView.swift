@@ -442,7 +442,6 @@ struct QuietHoursSettingsView: View {
     @State private var enabled = QuietHoursManager.shared.schedule.enabled
     @State private var start = QuietHoursSettingsView.date(fromMinutes: QuietHoursManager.shared.schedule.startMinutes)
     @State private var end = QuietHoursSettingsView.date(fromMinutes: QuietHoursManager.shared.schedule.endMinutes)
-    @State private var nowOn = QuietHoursManager.shared.overrideMode == .night
     @State private var effective = QuietHoursManager.shared.effectiveMode
 
     var body: some View {
@@ -456,13 +455,20 @@ struct QuietHoursSettingsView: View {
                     DatePicker("Ends", selection: $end, displayedComponents: .hourAndMinute)
                         .onChange(of: end) { _, v in update { $0.endMinutes = Self.minutes(from: v) } }
                 }
-                Toggle("Quiet now", isOn: $nowOn)
-                    .onChange(of: nowOn) { _, v in
+                Toggle("Quiet now", isOn: Binding(
+                    get: { effective == .night },
+                    set: { v in
                         Task {
-                            await QuietHoursManager.shared.setOverride(v ? .night : nil)
+                            // Force the mode explicitly (not nil) so the toggle
+                            // actually overrides the schedule when flipped
+                            // while inside/outside the current window — nil
+                            // would just re-derive from the schedule, which
+                            // hasn't changed, making the toggle a no-op.
+                            await QuietHoursManager.shared.setOverride(v ? .night : .day)
                             await MainActor.run { effective = QuietHoursManager.shared.effectiveMode; onChange() }
                         }
                     }
+                ))
                 LabeledContent("Currently", value: effective == .night
                                ? String(localized: "Quiet") : String(localized: "Normal"))
                     .foregroundStyle(.secondary)
