@@ -55,16 +55,6 @@ struct KeyEntryView: View {
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                         .keyboardType(.asciiCapable)
-
-                    PasteButton(payloadType: String.self) { strings in
-                        guard let pasted = strings.first,
-                              let hex = Self.extractHexKey(from: pasted) else {
-                            errorText = String(localized: "No 32-character hex key found on the clipboard.")
-                            return
-                        }
-                        keyText = hex
-                        errorText = nil
-                    }
                 } header: {
                     Text("Authentication key for \(watchName)")
                 } footer: {
