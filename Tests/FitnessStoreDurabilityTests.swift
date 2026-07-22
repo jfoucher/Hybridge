@@ -314,7 +314,30 @@ final class FitnessStoreDurabilityTests: XCTestCase {
         let expectedTotal = store.samples
             .filter { $0.timestamp >= startTS && $0.timestamp < endTS }
             .reduce(0) { $0 + $1.stepCount }
-        XCTAssertEqual(store.stepsPerHour(from: start, to: end).reduce(0) { $0 + $1.steps },
+        XCTAssertEqual(store.steps(inBucketsOf: 60, from: start, to: end)
+            .reduce(0) { $0 + $1.steps }, expectedTotal)
+        XCTAssertEqual(store.steps(inBucketsOf: 10, from: start, to: end)
+            .reduce(0) { $0 + $1.steps },
                        expectedTotal)
+    }
+
+    func testStepSeriesUsesRequestedBucketsAndSumsWatches() async {
+        let store = FitnessStore(fileURL: fileURL)
+        let watchB = UUID(uuidString: "DDDDDDDD-0000-0000-0000-000000000000")!
+        let base = Calendar.current.startOfDay(for: Date())
+        let timestamp = Int(base.timeIntervalSince1970)
+
+        await store.merge(samples: [sample(timestamp, steps: 12)],
+                          spo2: [], workouts: [], from: watch)
+        await store.merge(samples: [sample(timestamp + 5 * 60, steps: 8),
+                                    sample(timestamp + 12 * 60, steps: 5)],
+                          spo2: [], workouts: [], from: watchB)
+
+        let series = store.steps(inBucketsOf: 10, from: base,
+                                 to: base.addingTimeInterval(20 * 60))
+        XCTAssertEqual(series.map(\.steps), [20, 5])
+        XCTAssertEqual(series.map(\.start), [base, base.addingTimeInterval(10 * 60)])
+        XCTAssertEqual(series.map(\.end), [base.addingTimeInterval(10 * 60),
+                                           base.addingTimeInterval(20 * 60)])
     }
 }

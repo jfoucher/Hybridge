@@ -595,23 +595,34 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
         return buckets.enumerated().map { (hour: $0.offset, steps: $0.element) }
     }
 
-    /// Steps summed per clock-hour across a rolling window `[start, end)`,
-    /// e.g. the last 24h ending now (as opposed to `stepsPerHour(onDay:)`'s
-    /// midnight-to-midnight day). Each element's date is the start of that hour.
-    func stepsPerHour(from start: Date, to end: Date, calendar: Calendar = .current) -> [(date: Date, steps: Int)] {
-        let firstHour = calendar.dateInterval(of: .hour, for: start)?.start ?? start
-        let baseTS = Int(firstHour.timeIntervalSince1970)
-        let hourCount = max(Int(ceil(end.timeIntervalSince(firstHour) / 3600)), 0)
+    /// Sums the native one-minute samples into contiguous clock-aligned
+    /// buckets. The chart chooses `minutes` from its visible duration so it
+    /// keeps roughly the same number of bars at every zoom level.
+    func steps(inBucketsOf minutes: Int, from start: Date, to end: Date,
+               calendar: Calendar = .current) -> [(start: Date, end: Date, steps: Int)] {
+        let bucketSeconds = max(minutes, 1) * 60
+        let dayStart = calendar.startOfDay(for: start)
+        let elapsed = max(Int(start.timeIntervalSince(dayStart)), 0)
+        let firstBucket = dayStart.addingTimeInterval(
+            TimeInterval((elapsed / bucketSeconds) * bucketSeconds)
+        )
+        let baseTS = Int(firstBucket.timeIntervalSince1970)
+        let bucketCount = max(Int(ceil(end.timeIntervalSince(firstBucket)
+                                      / TimeInterval(bucketSeconds))), 0)
         let startTS = Int(start.timeIntervalSince1970)
         let endTS = Int(end.timeIntervalSince1970)
-        var buckets = [Int](repeating: 0, count: hourCount)
+        var buckets = [Int](repeating: 0, count: bucketCount)
         for index in range(from: startTS, to: endTS) {
             let sample = samples[index]
-            let idx = (sample.timestamp - baseTS) / 3600
+            let idx = (sample.timestamp - baseTS) / bucketSeconds
             if idx >= 0 && idx < buckets.count { buckets[idx] += sample.stepCount }
         }
         return buckets.enumerated().map {
-            (date: Date(timeIntervalSince1970: TimeInterval(baseTS + $0.offset * 3600)), steps: $0.element)
+            let bucketStart = Date(timeIntervalSince1970:
+                TimeInterval(baseTS + $0.offset * bucketSeconds))
+            return (start: bucketStart,
+                    end: bucketStart.addingTimeInterval(TimeInterval(bucketSeconds)),
+                    steps: $0.element)
         }
     }
 

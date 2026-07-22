@@ -12,6 +12,9 @@ struct FitnessView: View {
     @State private var showDayPicker = false
     @State private var busyText: String?
     @State private var confirmingHistoryDeletion = false
+    @State private var chartVisibleDuration: TimeInterval = 86400
+    @State private var chartScrollPosition = Date()
+    @State private var chartViewportInitialized = false
     @AppStorage("healthAutoExportEnabled") private var autoExportEnabled = false
 
     private var kind: WatchKind {
@@ -30,6 +33,16 @@ struct FitnessView: View {
         let end = Calendar.current.date(byAdding: .day, value: 1, to: start)
             ?? start.addingTimeInterval(86400)
         return start...end
+    }
+
+    /// The portion of `chartWindow` currently visible after zooming and
+    /// scrolling. Both charts share it so their time axes stay aligned.
+    private var visibleChartWindow: ClosedRange<Date> {
+        let fullDuration = chartWindow.upperBound.timeIntervalSince(chartWindow.lowerBound)
+        let duration = min(max(chartVisibleDuration, 0), fullDuration)
+        let latestStart = chartWindow.upperBound.addingTimeInterval(-duration)
+        let start = min(max(chartScrollPosition, chartWindow.lowerBound), latestStart)
+        return start...start.addingTimeInterval(duration)
     }
 
     var body: some View {
@@ -82,6 +95,14 @@ struct FitnessView: View {
                 }
             } message: {
                 Text("This permanently removes activity, heart-rate, SpO₂, sleep, workout and sync history stored by Hybridge on this iPhone. Data already exported to Apple Health is not removed.")
+            }
+            .onAppear {
+                guard !chartViewportInitialized else { return }
+                chartViewportInitialized = true
+                resetChartViewport()
+            }
+            .onChange(of: selectedDay) { _, _ in
+                resetChartViewport()
             }
         }
     }
@@ -173,20 +194,28 @@ struct FitnessView: View {
                     }
 
                     let window = chartWindow
-                    let bars = fitness.stepsPerHour(from: window.lowerBound, to: window.upperBound)
-                        .map { HourBar(date: $0.date, steps: $0.steps) }
+                    let bucketMinutes = FitnessStepBuckets.minutes(
+                        for: chartVisibleDuration
+                    )
+                    let bars = fitness.steps(inBucketsOf: bucketMinutes,
+                                             from: window.lowerBound,
+                                             to: window.upperBound)
+                        .map { StepBar(start: $0.start, end: $0.end, steps: $0.steps) }
                     if bars.allSatisfy({ $0.steps == 0 }) {
                         Text("No step data for this period.")
                             .font(Theme.sans(13, relativeTo: .footnote)).foregroundStyle(Theme.sub)
                             .frame(height: 104, alignment: .center)
                             .frame(maxWidth: .infinity)
                     } else {
-                        StepsChartView(bars: bars, domain: window)
+                        StepsChartView(bars: bars,
+                                       domain: window,
+                                       visibleDuration: $chartVisibleDuration,
+                                       scrollPosition: $chartScrollPosition)
                     }
                 }
                 .padding(16)
             }
-            Footer("Today's total is read from the watch's step counter. The hourly breakdown is reconstructed from synced minute samples and may not add up.")
+            Footer("Today's total is read from the watch's step counter. The graph is reconstructed from synced minute samples and may not add up.")
         }
     }
 
@@ -195,6 +224,7 @@ struct FitnessView: View {
     private var heartRateCard: some View {
         let window = chartWindow
         let series = fitness.heartRateSeries(from: window.lowerBound, to: window.upperBound)
+        let visibleSeries = series.filter { visibleChartWindow.contains($0.date) }
         return ThemedCard {
             VStack(alignment: .leading, spacing: 10) {
                 if series.isEmpty {
@@ -202,10 +232,11 @@ struct FitnessView: View {
                         .font(Theme.sans(13, relativeTo: .footnote)).foregroundStyle(Theme.sub)
                         .frame(height: 96, alignment: .center).frame(maxWidth: .infinity)
                 } else {
-                    let bpms = series.map(\.bpm)
-                    Text("\(bpms.min() ?? 0)–\(bpms.max() ?? 0) bpm")
-                        .font(Theme.mono(13))
-                        .foregroundColor(Theme.sub)
+                    let bpms = visibleSeries.map(\.bpm)
+                    let bpmSummary = bpms.isEmpty
+                        ? "— \(String(localized: "bpm"))"
+                        : String(localized: "\(bpms.min() ?? 0)–\(bpms.max() ?? 0) bpm")
+                    Text(bpmSummary)
                         .font(Theme.mono(24, weight: .semibold))
                         .foregroundStyle(Theme.ink)
 
@@ -221,14 +252,9 @@ struct FitnessView: View {
                             .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
                             .interpolationMethod(.monotone)
                     }
-                    .chartXScale(domain: window)
                     .chartYScale(domain: 40...180)
                     .chartXAxis {
-                        AxisMarks(values: .stride(by: .hour, count: 6)) { _ in
-                            AxisGridLine().foregroundStyle(Theme.line)
-                            AxisValueLabel(format: .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
-                                .font(Theme.mono(9)).foregroundStyle(Theme.sub)
-                        }
+                        FitnessTimeAxis.marks(visibleDuration: chartVisibleDuration)
                     }
                     .chartYAxis {
                         AxisMarks(position: .leading, values: [40, 80, 120, 160]) { _ in
@@ -236,6 +262,9 @@ struct FitnessView: View {
                             AxisValueLabel().font(Theme.mono(9)).foregroundStyle(Theme.sub)
                         }
                     }
+                    .fitnessChartViewport(domain: window,
+                                          visibleDuration: $chartVisibleDuration,
+                                          scrollPosition: $chartScrollPosition)
                     .frame(height: 96)
                 }
             }
@@ -360,6 +389,12 @@ struct FitnessView: View {
         return fitness.steps(onDay: day)
     }
 
+    private func resetChartViewport() {
+        let window = chartWindow
+        chartVisibleDuration = window.upperBound.timeIntervalSince(window.lowerBound)
+        chartScrollPosition = window.lowerBound
+    }
+
     private func runBusy(_ message: LocalizedStringResource,
                          _ action: @escaping () async throws -> LocalizedStringResource) {
         busyText = String(localized: message)
@@ -384,33 +419,45 @@ private enum FitnessStoreDeletionError: LocalizedError {
 
 /// Chart-friendly (Identifiable) wrappers — Swift Charts can't key a plain
 /// tuple array, and FitnessStore returns tuples.
-private struct HourBar: Identifiable { let date: Date; let steps: Int; var id: Date { date } }
+private struct StepBar: Identifiable {
+    let start: Date
+    let end: Date
+    let steps: Int
+    var id: Date { start }
+}
 private struct HRPoint: Identifiable { let date: Date; let bpm: Int; var id: Date { date } }
 
-/// The steps bar chart: real clock hours on the x axis, step-count
-/// graduations on the y axis, and tap-to-highlight with a value tooltip.
+/// The steps histogram uses time intervals rather than fixed-width marks, so
+/// adjacent aggregation buckets touch at every zoom level.
 private struct StepsChartView: View {
-    let bars: [HourBar]
+    let bars: [StepBar]
     let domain: ClosedRange<Date>
+    @Binding var visibleDuration: TimeInterval
+    @Binding var scrollPosition: Date
     @State private var selectedDate: Date?
 
     private var maxSteps: Int { max(bars.map(\.steps).max() ?? 1, 1) }
 
-    private var selected: HourBar? {
+    private var selected: StepBar? {
         guard let selectedDate else { return nil }
-        return bars.first { selectedDate >= $0.date && selectedDate < $0.date.addingTimeInterval(3600) }
+        return bars.first {
+            selectedDate >= $0.start && selectedDate < $0.end
+        }
     }
 
     var body: some View {
         Chart {
             ForEach(bars) { bar in
-                BarMark(x: .value("Time", bar.date), y: .value("Steps", bar.steps), width: .fixed(9))
+                RectangleMark(xStart: .value("Start", insetStart(for: bar)),
+                              xEnd: .value("End", insetEnd(for: bar)),
+                              yStart: .value("Baseline", 0),
+                              yEnd: .value("Steps", bar.steps))
                     .foregroundStyle(barColor(bar.steps))
-                    .cornerRadius(3)
-                    .opacity(selected == nil || selected?.date == bar.date ? 1 : 0.35)
+                    .cornerRadius(2, style: .continuous)
+                    .opacity(selected == nil || selected?.start == bar.start ? 1 : 0.35)
             }
             if let selected {
-                RuleMark(x: .value("Time", selected.date))
+                RuleMark(x: .value("Time", selected.start))
                     .foregroundStyle(Theme.sub.opacity(0.4))
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [2, 2]))
                     .annotation(position: .top, spacing: 4) {
@@ -418,13 +465,8 @@ private struct StepsChartView: View {
                     }
             }
         }
-        .chartXScale(domain: domain)
         .chartXAxis {
-            AxisMarks(values: .stride(by: .hour, count: 6)) { _ in
-                AxisGridLine().foregroundStyle(Theme.line)
-                AxisValueLabel(format: .dateTime.hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
-                    .font(Theme.mono(9)).foregroundStyle(Theme.sub)
-            }
+            FitnessTimeAxis.marks(visibleDuration: visibleDuration)
         }
         .chartYAxis {
             AxisMarks(position: .leading) { _ in
@@ -432,6 +474,9 @@ private struct StepsChartView: View {
                 AxisValueLabel().font(Theme.mono(9)).foregroundStyle(Theme.sub)
             }
         }
+        .fitnessChartViewport(domain: domain,
+                              visibleDuration: $visibleDuration,
+                              scrollPosition: $scrollPosition)
         .chartXSelection(value: $selectedDate)
         .frame(height: 120)
     }
@@ -443,10 +488,20 @@ private struct StepsChartView: View {
         return Theme.barLow
     }
 
-    private func tooltip(for bar: HourBar) -> some View {
-        let end = Calendar.current.date(byAdding: .hour, value: 1, to: bar.date) ?? bar.date
-        let startText = bar.date.formatted(date: .omitted, time: .shortened)
-        let endText = end.formatted(date: .omitted, time: .shortened)
+    /// Leave an 8% total gap between neighboring time intervals. Because it
+    /// is proportional to the bucket duration, the visual spacing stays nearly
+    /// constant as the aggregation level changes while zooming.
+    private func insetStart(for bar: StepBar) -> Date {
+        bar.start.addingTimeInterval(bar.end.timeIntervalSince(bar.start) * 0.04)
+    }
+
+    private func insetEnd(for bar: StepBar) -> Date {
+        bar.end.addingTimeInterval(-bar.end.timeIntervalSince(bar.start) * 0.04)
+    }
+
+    private func tooltip(for bar: StepBar) -> some View {
+        let startText = bar.start.formatted(date: .omitted, time: .shortened)
+        let endText = bar.end.formatted(date: .omitted, time: .shortened)
         return VStack(spacing: 1) {
             Text("\(bar.steps)").font(Theme.mono(13, weight: .semibold)).foregroundStyle(Theme.ink)
             Text(String(localized: "\(startText)–\(endText)"))
@@ -456,6 +511,116 @@ private struct StepsChartView: View {
         .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Theme.card))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Theme.line, lineWidth: 1))
         .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+    }
+}
+
+/// Picks a friendly clock interval nearest to one twenty-fourth of the visible
+/// time span. All choices divide a day evenly, so bucket boundaries stay stable
+/// while the user pans sideways.
+private enum FitnessStepBuckets {
+    private static let choices = [1, 2, 3, 5, 6, 10, 12, 15, 20, 30, 40, 60, 90, 120]
+
+    static func minutes(for visibleDuration: TimeInterval) -> Int {
+        let target = visibleDuration / 60 / 24
+        return choices.min {
+            abs(Double($0) - target) < abs(Double($1) - target)
+        } ?? 60
+    }
+}
+
+/// Chooses useful time labels for the current zoom level. A fixed six-hour
+/// stride becomes unhelpful once only a few hours are visible.
+private enum FitnessTimeAxis {
+    @AxisContentBuilder
+    static func marks(visibleDuration: TimeInterval) -> some AxisContent {
+        if visibleDuration <= 3 * 3600 {
+            marks(component: .minute, count: 30)
+        } else if visibleDuration <= 8 * 3600 {
+            marks(component: .hour, count: 1)
+        } else if visibleDuration <= 16 * 3600 {
+            marks(component: .hour, count: 3)
+        } else {
+            marks(component: .hour, count: 6)
+        }
+    }
+
+    private static func marks(component: Calendar.Component, count: Int) -> some AxisContent {
+        AxisMarks(values: .stride(by: component, count: count)) { _ in
+            AxisGridLine().foregroundStyle(Theme.line)
+            AxisValueLabel(format: .dateTime
+                .hour(.twoDigits(amPM: .omitted))
+                .minute(.twoDigits))
+                .font(Theme.mono(9))
+                .foregroundStyle(Theme.sub)
+        }
+    }
+}
+
+private extension View {
+    func fitnessChartViewport(domain: ClosedRange<Date>,
+                              visibleDuration: Binding<TimeInterval>,
+                              scrollPosition: Binding<Date>) -> some View {
+        modifier(FitnessChartViewportModifier(domain: domain,
+                                              visibleDuration: visibleDuration,
+                                              scrollPosition: scrollPosition))
+    }
+}
+
+/// Native chart scrolling handles one-finger horizontal movement. The
+/// simultaneous magnification gesture changes the visible time duration while
+/// keeping the current midpoint stable, producing a map-like pinch interaction.
+private struct FitnessChartViewportModifier: ViewModifier {
+    let domain: ClosedRange<Date>
+    @Binding var visibleDuration: TimeInterval
+    @Binding var scrollPosition: Date
+
+    @State private var gestureStartDuration: TimeInterval?
+    @State private var gestureStartCenter: Date?
+
+    private let minimumDuration: TimeInterval = 2 * 3600
+
+    func body(content: Content) -> some View {
+        content
+            .chartXScale(domain: domain)
+            .chartScrollableAxes(.horizontal)
+            .chartXVisibleDomain(length: visibleDuration)
+            .chartScrollPosition(x: $scrollPosition)
+            .simultaneousGesture(
+                MagnificationGesture()
+                    .onChanged { magnification in
+                        beginGestureIfNeeded()
+                        guard let startDuration = gestureStartDuration,
+                              let center = gestureStartCenter else { return }
+
+                        let fullDuration = domain.upperBound.timeIntervalSince(domain.lowerBound)
+                        let nextDuration = min(fullDuration,
+                                               max(minimumDuration,
+                                                   startDuration / Double(magnification)))
+                        visibleDuration = nextDuration
+                        scrollPosition = clampedStart(
+                            center.addingTimeInterval(-nextDuration / 2),
+                            duration: nextDuration
+                        )
+                    }
+                    .onEnded { _ in
+                        gestureStartDuration = nil
+                        gestureStartCenter = nil
+                    }
+            )
+    }
+
+    private func beginGestureIfNeeded() {
+        guard gestureStartDuration == nil else { return }
+        let fullDuration = domain.upperBound.timeIntervalSince(domain.lowerBound)
+        let duration = min(visibleDuration, fullDuration)
+        gestureStartDuration = duration
+        let start = clampedStart(scrollPosition, duration: duration)
+        gestureStartCenter = start.addingTimeInterval(duration / 2)
+    }
+
+    private func clampedStart(_ proposed: Date, duration: TimeInterval) -> Date {
+        let latest = domain.upperBound.addingTimeInterval(-duration)
+        return min(max(proposed, domain.lowerBound), latest)
     }
 }
 
