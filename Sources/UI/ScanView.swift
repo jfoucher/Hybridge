@@ -41,7 +41,6 @@ struct ScanView: View {
                              : String(localized: "Tap Scan to search for your watch."))
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                        Text("Press and hold the middle button on your watch until it vibrates and the hands start moving.")
                     }
                     ForEach(watch.discovered) { found in
                         Button {
@@ -105,7 +104,7 @@ struct ScanView: View {
                     pendingEnrollment = nil
                 }
             } message: { found in
-                Text("\(found.name) (\(found.rssi) dB)\n\nContinue only if this is your nearby watch and it is in pairing mode. Hybridge will verify its firmware, model, family, and authentication state after connecting. Older Fossil Q watches use an unencrypted Bluetooth file protocol, so explicit enrollment is their trust boundary.")
+                Text("\(found.name) (\(found.rssi) dB)\n\nContinue only if this is your nearby watch and it is in pairing mode. After connecting, the watch will vibrate and you'll press its middle button to confirm — so a stranger's nearby watch can't be added by accident. Hybridge also verifies its firmware, model, family, and authentication state.")
             }
         }
     }

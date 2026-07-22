@@ -113,6 +113,11 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
     /// BLE bond status as reported by the watch (nil until checked). Bonding
     /// unlocks iOS-native ANCS/AMS on the watch side.
     @Published var isDevicePaired: Bool?
+    /// True while a freshly added watch is buzzing and waiting for the user to
+    /// press its middle button to confirm adoption — the same physical check
+    /// the official app requires, so you can't accidentally add someone else's
+    /// nearby watch. Drives the confirmation overlay.
+    @Published var awaitingAdoptionConfirm = false
     @Published var log: [LogEntry] = []
     @Published var uploadProgress: Double?
     @Published var liveHeartRate: Int?
@@ -162,6 +167,12 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
     /// bonded yet. Never set on auto-reconnects — the dialog would pop up
     /// unprompted. Consumed by initializeWatch().
     var autoPairOnNextInit = false
+
+    /// Set only when the picked watch was NOT already in the roster, so init
+    /// runs the vibrate-and-press adoption gate (and forgets the watch again
+    /// if it isn't confirmed). Re-picking an already-added watch is just a
+    /// reconnect and skips the gate. Consumed by the init sequences.
+    var adoptingNewWatch = false
 
     /// Dedup index of the last raw button-press frame (requestType 0x08) —
     /// the watch repeats the frame, GB dedups the same way.
@@ -353,11 +364,15 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
             if let current = self.peripheral, current.identifier != peripheral.identifier {
                 self.teardownSession()
             }
+            // A watch already in the roster is a reconnect, not an adoption —
+            // only genuinely new watches run the vibrate-and-press gate.
+            let isNewWatch = WatchRegistry.shared.watch(peripheral.identifier) == nil
             WatchRegistry.shared.register(id: peripheral.identifier,
                                           name: peripheral.name ?? String(localized: "Fossil watch"))
             self.activateAndReloadScopedState(peripheral.identifier)
             self.userWantsConnection = true
             self.autoPairOnNextInit = true
+            self.adoptingNewWatch = isNewWatch
             self.peripheral = peripheral
             self.establishConnectionToken(for: peripheral)
             peripheral.delegate = self
@@ -378,6 +393,32 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
             self.connectActiveLocked()
             
         }
+    }
+
+    /// Cancels an in-flight adoption confirmation (the phone-side "Cancel" on
+    /// the buzz-and-press overlay). Fails only the confirm request so its
+    /// `run` throws and the init sequence forgets the watch — a no-op if some
+    /// other request happens to be in flight.
+    func cancelAdoptionConfirm() {
+        bleQueue.async {
+            guard self.currentRequest is ConfirmOnDeviceRequest
+                    || self.currentRequest is QConfirmOnDeviceRequest else { return }
+            self.failCurrentRequest(FossilError.cancelled)
+        }
+    }
+
+    /// Undoes a freshly-added watch that failed the adoption confirmation:
+    /// tells the user why, then forgets it so nothing was actually added
+    /// (drops the session, removes it from the roster, deletes its key).
+    /// Called from the init sequences when `confirmAdoption` returns false.
+    func abandonAdoption(_ id: UUID) async {
+        addLog("Adoption not confirmed — removing \(id)")
+        await MainActor.run {
+            self.awaitingAdoptionConfirm = false
+            ToastCenter.shared.error(String(
+                localized: "Watch not added. Press the middle button while the watch vibrates to confirm it's yours."))
+        }
+        forget(id)
     }
 
     /// Removes a watch from the roster, deleting its auth key and all its
@@ -436,9 +477,11 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
         pendingPackets = []
         fileVersions = DeviceFileVersions()
         autoPairOnNextInit = false
+        adoptingNewWatch = false
         lastButtonFrameIndex = -1
         DispatchQueue.main.async {
             self.connectionState = .disconnected
+            self.awaitingAdoptionConfirm = false
             self.isAuthenticated = false
             self.isDevicePaired = nil
             self.batteryLevel = nil

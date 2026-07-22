@@ -128,6 +128,7 @@ enum FossilError: LocalizedError {
     case notAuthenticated
     case sessionNotHeld(String)
     case staleConnection
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -145,6 +146,8 @@ enum FossilError: LocalizedError {
             return String(localized: "Internal error: \(name) issued without the watch session")
         case .staleConnection:
             return String(localized: "The active watch connection changed before the operation completed")
+        case .cancelled:
+            return String(localized: "Operation cancelled")
         }
     }
 }

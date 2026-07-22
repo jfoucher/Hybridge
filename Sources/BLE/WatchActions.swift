@@ -64,6 +64,20 @@ extension WatchManager {
             try await fetchDeviceInfo()
             try await authenticate()
             guard stillActive() else { return }
+            if adoptingNewWatch {
+                // Trust gate first: the freshly added watch buzzes and the
+                // user must press a button before we bond, so a stranger's
+                // nearby watch can't be added by accident. Not confirmed →
+                // undo the add entirely.
+                guard await confirmAdoption() else {
+                    adoptingNewWatch = false
+                    autoPairOnNextInit = false
+                    await abandonAdoption(token.watchID)
+                    return
+                }
+                adoptingNewWatch = false
+                guard stillActive() else { return }
+            }
             if let paired = try? await checkDevicePairing(),
                !paired, autoPairOnNextInit {
                 // Freshly added watch: bring up the iOS pairing dialog right
@@ -343,6 +357,34 @@ extension WatchManager {
             return token.kind.needsAuthKey ? try await self.findWatch()
                                            : try await self.findQWatch()
         }
+    }
+
+    /// Adoption trust gate for an HR watch: buzz it and wait for the user to
+    /// press a button, proving the watch in their hand is the one being added
+    /// — the same confirmation the official app requires, so a stranger's
+    /// nearby watch can't be added by accident. Returns whether adoption may
+    /// proceed. Firmware < 2.22 can't vibrate-confirm, so it's admitted (no
+    /// gate is available there). Runs with the session already held (called
+    /// from init); drives the `awaitingAdoptionConfirm` overlay.
+    private func confirmAdoption() async -> Bool {
+        let firmware = await MainActor.run { FirmwareVersion(self.firmwareVersion) }
+        guard firmware?.atLeast(2, 22) ?? true else {
+            addLog("Adoption: firmware < 2.22 — vibrate-confirm unavailable, admitting")
+            return true
+        }
+        await MainActor.run { self.awaitingAdoptionConfirm = true }
+        let request = ConfirmOnDeviceRequest()
+        var confirmed = false
+        do {
+            try await run(request)
+            confirmed = request.confirmed
+        } catch {
+            // A timeout, a cancel, or a dropped link all mean "not confirmed".
+            addLog("Adoption confirm ended: \(error.localizedDescription)")
+        }
+        await MainActor.run { self.awaitingAdoptionConfirm = false }
+        addLog(confirmed ? "Adoption: confirmed on watch" : "Adoption: not confirmed")
+        return confirmed
     }
 
     /// Wipes the watch back to factory state. The watch reboots and drops the

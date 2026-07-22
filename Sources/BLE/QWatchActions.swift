@@ -30,10 +30,24 @@ extension WatchManager {
                 // Freshly added watch: sweep the hands as a visible hello
                 try? await run(PairingAnimationRequest())
             }
-            autoPairOnNextInit = false
             try await fetchDeviceInfo()
             guard stillActive() else { return }
             addLog("Q file versions: \(fileVersions.summary)")
+            if adoptingNewWatch {
+                // Trust gate: the Q protocol has no auth key, so this
+                // buzz-and-press is the only proof the watch in the user's
+                // hand is the one being added (official-app add flow). Not
+                // confirmed → undo the add entirely.
+                guard await confirmQAdoption() else {
+                    adoptingNewWatch = false
+                    autoPairOnNextInit = false
+                    await abandonAdoption(token.watchID)
+                    return
+                }
+                adoptingNewWatch = false
+                guard stillActive() else { return }
+            }
+            autoPairOnNextInit = false
             try? await syncQSettings()
             try? await setTime()
             try? await readConfigurationQ()
@@ -58,6 +72,29 @@ extension WatchManager {
             addLog("Q init failed: \(error.localizedDescription)")
             await MainActor.run { self.connectionState = .failed(error.localizedDescription) }
         }
+    }
+
+    /// Adoption trust gate for a Q watch: buzz it and wait for the middle-
+    /// button press, the Q counterpart of `confirmAdoption`. The `run`
+    /// idle-timeout (surfaced as `FossilError.timeout`) is the no-press case —
+    /// nothing is sent when the watch's vibration window lapses. The press
+    /// already stops the vibration watch-side; the explicit stop covers the
+    /// timeout/cancel paths. Runs with the session already held.
+    private func confirmQAdoption() async -> Bool {
+        await MainActor.run { self.awaitingAdoptionConfirm = true }
+        let request = QConfirmOnDeviceRequest()
+        var confirmed = false
+        do {
+            try await run(request)
+            confirmed = request.confirmed
+        } catch {
+            // Timeout, cancel, or dropped link all mean "not confirmed".
+            addLog("Q adoption confirm ended: \(error.localizedDescription)")
+        }
+        try? await run(QVibrateRequest(start: false))
+        await MainActor.run { self.awaitingAdoptionConfirm = false }
+        addLog(confirmed ? "Q adoption: confirmed on watch" : "Q adoption: not confirmed")
+        return confirmed
     }
 
     /// Uploads config items as a plaintext put to 0x0800 — the same TLV file

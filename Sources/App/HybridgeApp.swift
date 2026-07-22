@@ -61,6 +61,12 @@ struct ContentView: View {
         // and alarm cards weren't designed for the largest accessibility
         // sizes and would clip/overlap past this ceiling.
         .toastOverlay()
+        .fullScreenCover(isPresented: Binding(
+            get: { watch.awaitingAdoptionConfirm },
+            set: { _ in }   // dismissal is driven by the flag itself
+        )) {
+            AdoptionConfirmView()
+        }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView()
         }
