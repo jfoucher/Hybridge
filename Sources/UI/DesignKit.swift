@@ -268,10 +268,26 @@ extension View {
     /// SwiftUI's default grouped background (which the global UIKit appearance
     /// can't override) and paints the page in `Theme.bg`. Rows keep their
     /// near-white cells, reading as cards on the warm page.
+    ///
+    /// Also reserves bottom scroll-content space for the floating tab bar: a
+    /// `NavigationStack` doesn't forward the bar's `safeAreaInset` to its pushed
+    /// scrolling screens, so — just like `ThemedScreen` — these `List`/`Form`
+    /// sub-screens must add the measured bar height themselves, or their last
+    /// rows scroll under the bar (`floatingTabBarHeight` is 0 in the sidebar).
     func themedList() -> some View {
-        scrollContentBackground(.hidden)
+        modifier(ThemedListModifier())
+    }
+}
+
+private struct ThemedListModifier: ViewModifier {
+    @Environment(\.floatingTabBarHeight) private var tabBarHeight
+
+    func body(content: Content) -> some View {
+        content
+            .scrollContentBackground(.hidden)
             .background(Theme.bg.ignoresSafeArea())
             .tint(Theme.accent)
+            .contentMargins(.bottom, tabBarHeight, for: .scrollContent)
     }
 }
 
