@@ -63,7 +63,6 @@ final class WatchScopedKeyTests: XCTestCase {
         // UserDefaults keys, so changing one silently orphans user settings.
         XCTAssertEqual(WatchScopedKey.storedAlarms.rawValue, "storedAlarms")
         XCTAssertEqual(WatchScopedKey.qButtonFunctions.rawValue, "qButtonFunctions")
-        XCTAssertEqual(WatchScopedKey.commuteDestinations2.rawValue, "commuteDestinations2")
         XCTAssertEqual(WatchScopedKey.bodyHeightCm.rawValue, "bodyHeightCm")
         XCTAssertEqual(WatchScopedKey.quietSchedule.rawValue, "quietSchedule")
         XCTAssertEqual(WatchScopedKey.notificationIconsEnabled.rawValue, "notificationIconsEnabled")

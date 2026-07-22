@@ -68,48 +68,23 @@ final class UploadedAppStoreTests: XCTestCase {
         ButtonSelection(button: .top, press: .short, appName: appName)
     }
 
-    private func openAppMenuItem(_ appName: String) -> WatchMenuItem {
-        var item = WatchMenuItem()
-        item.kind = .openApp
-        item.text = appName
-        return item
-    }
-
-    func testReferencedAppNamesUnionsButtonsAndMenu() {
+    func testReferencedAppNamesCollectsButtonApps() {
         let names = ButtonConfig.referencedAppNames(
-            buttonSelections: [selection("homeAssistantApp"), selection("weatherApp")],
-            menuItems: [openAppMenuItem("timerApp")])
+            buttonSelections: [selection("homeAssistantApp"), selection("weatherApp")])
 
-        XCTAssertEqual(names, ["homeAssistantApp", "weatherApp", "timerApp"])
+        XCTAssertEqual(names, ["homeAssistantApp", "weatherApp"])
     }
 
     func testReferencedAppNamesFiltersEmptyNames() {
         let names = ButtonConfig.referencedAppNames(
-            buttonSelections: [selection("")],
-            menuItems: [openAppMenuItem("")])
+            buttonSelections: [selection("")])
 
         XCTAssertTrue(names.isEmpty)
     }
 
-    func testReferencedAppNamesIgnoresNonOpenAppMenuItems() {
-        var showMessage = WatchMenuItem()
-        showMessage.kind = .showMessage
-        showMessage.text = "notAnApp"
-        var sendToPhone = WatchMenuItem()
-        sendToPhone.kind = .sendToPhone
-        sendToPhone.text = "alsoNotAnApp"
-
+    func testReferencedAppNamesDeduplicates() {
         let names = ButtonConfig.referencedAppNames(
-            buttonSelections: [],
-            menuItems: [showMessage, sendToPhone])
-
-        XCTAssertTrue(names.isEmpty)
-    }
-
-    func testReferencedAppNamesDeduplicatesAcrossButtonsAndMenu() {
-        let names = ButtonConfig.referencedAppNames(
-            buttonSelections: [selection("homeAssistantApp")],
-            menuItems: [openAppMenuItem("homeAssistantApp")])
+            buttonSelections: [selection("homeAssistantApp"), selection("homeAssistantApp")])
 
         XCTAssertEqual(names, ["homeAssistantApp"])
     }
