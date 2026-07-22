@@ -1,0 +1,197 @@
+name: Hybridge
+options:
+  bundleIdPrefix: eu.sixpixels
+  developmentLanguage: en
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    TARGETED_DEVICE_FAMILY: "1,2"
+    MARKETING_VERSION: "1.0.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    # Kept here, not only in the generated project: without it `xcodegen
+    # generate` drops the team, automatic signing then re-resolves against no
+    # team and silently strips entitlements that need one (WeatherKit, HealthKit).
+    DEVELOPMENT_TEAM: 24G23598DF
+targets:
+  Hybridge:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources
+      - path: Resources/Assets.xcassets
+      - path: Resources/Localizable.xcstrings
+      - path: Resources/InfoPlist.xcstrings
+      - path: Resources/fossil_hr
+        type: folder
+        buildPhase: resources
+      - path: Resources/bundled_faces
+        type: folder
+        buildPhase: resources
+      # Bundled watch-skin artwork is not distributed until its provenance and
+      # redistribution permission are recorded. Runtime user imports remain.
+      - path: Resources/ring.caf
+        buildPhase: resources
+      - path: Resources/fonts/InstrumentSerif-Regular.ttf
+        buildPhase: resources
+      - path: Resources/fonts/IBMPlexMono-Regular.ttf
+        buildPhase: resources
+      - path: Resources/fonts/IBMPlexMono-Medium.ttf
+        buildPhase: resources
+      - path: Resources/fonts/IBMPlexMono-SemiBold.ttf
+        buildPhase: resources
+      - path: LICENSE
+        buildPhase: resources
+      - path: THIRD-PARTY.md
+        buildPhase: resources
+      - path: Resources/fonts/OFL.txt
+        buildPhase: resources
+    info:
+      path: Sources/Info.plist
+      properties:
+        CFBundleDisplayName: Hybridge
+        NSHumanReadableCopyright: "© 2026 Jonathan Foucher"
+        UILaunchScreen: {}
+        NSBluetoothAlwaysUsageDescription: >
+          Hybridge connects to your Hybrid HR watch over Bluetooth to set
+          the time, alarms, settings and watchfaces.
+        NSHealthShareUsageDescription: >
+          Hybridge does not read any Health data.
+        NSHealthUpdateUsageDescription: >
+          Hybridge writes the steps, heart rate, calories and SpO2 recorded
+          by your watch into Apple Health.
+        NSAppleMusicUsageDescription: >
+          Shows the current track on your watch and lets its buttons control
+          playback.
+        NSLocationWhenInUseUsageDescription: >
+          Records GPS distance for workouts you start on your watch (or from
+          the app's Workout GPS screen). While a workout is active, location is
+          used in the background — with the blue status-bar indicator showing —
+          and stops when the workout ends. Also fetches local weather to show
+          on your watch.
+        NSCalendarsFullAccessUsageDescription: >
+          Sends your upcoming events to your watch.
+        NSLocalNetworkUsageDescription: >
+          Connects to your Home Assistant server on your local network when
+          the Home Assistant watch app requests entities or sends a control.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        # No `audio` mode: it exists for media playback, and our only use was
+        # the find-my-phone ring (App Store guideline 2.5.4 — background modes
+        # only for their intended purpose). Ringing is foreground-only; when
+        # the watch asks while we're backgrounded, PhoneFinder posts a local
+        # notification instead.
+        UIBackgroundModes: [bluetooth-central, location, fetch]
+        BGTaskSchedulerPermittedIdentifiers:
+          - eu.sixpixels.hybridge.refresh
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        "UISupportedInterfaceOrientations~ipad":
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        # The app's cryptography (Sources/Crypto/) is built entirely on the
+        # AES primitives provided by the operating system (CommonCrypto); it
+        # adds no encryption beyond what Apple's OS supplies. Declared exempt on
+        # that basis, so App Store Connect skips the per-build export-compliance
+        # prompt. (Export-compliance classification is the exporter's own legal
+        # responsibility.)
+        ITSAppUsesNonExemptEncryption: false
+        # Managed here so `xcodegen generate` cannot reset them (it rewrites
+        # Info.plist wholesale, and CFBundleVersion must be unique per upload).
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        UIAppFonts:
+          - InstrumentSerif-Regular.ttf
+          - IBMPlexMono-Regular.ttf
+          - IBMPlexMono-Medium.ttf
+          - IBMPlexMono-SemiBold.ttf
+    entitlements:
+      path: Sources/Hybridge.entitlements
+      properties:
+        com.apple.developer.healthkit: true
+        com.apple.developer.weatherkit: true
+        com.apple.security.application-groups:
+          - group.eu.sixpixels.hybridge
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: eu.sixpixels.hybridge
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        SWIFT_EMIT_LOC_STRINGS: YES
+    dependencies:
+      - target: HybridgeWidgets
+  HybridgeWidgets:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: Widgets
+      - path: Sources/Support/WidgetSnapshot.swift
+      - path: Resources/Localizable.xcstrings
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: Hybridge
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: Widgets/HybridgeWidgets.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.eu.sixpixels.hybridge
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: eu.sixpixels.hybridge.widgets
+        SKIP_INSTALL: YES
+        SWIFT_EMIT_LOC_STRINGS: YES
+  HybridgeTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+    dependencies:
+      - target: Hybridge
+
+# Schemes are declared explicitly so `xcodegen generate` writes them as shared
+# schemes. Without this, none are generated and Xcode silently autocreates them
+# per-user (xcuserdata) — which is what left the app scheme missing after the
+# project was regenerated under a new name.
+schemes:
+  Hybridge:
+    build:
+      targets:
+        Hybridge: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - HybridgeTests
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+  HybridgeWidgets:
+    build:
+      targets:
+        HybridgeWidgets: all
+    run:
+      config: Debug
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

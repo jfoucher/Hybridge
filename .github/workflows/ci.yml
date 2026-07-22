@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build & test
+    # Keep CI on the same toolchain used for local development. macos-15's
+    # default is currently Xcode 26.2, whose SwiftUI SDK does not include the
+    # LocalizedStringResource overloads used by the app.
+    runs-on: macos-26
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify Xcode version
+        run: |
+          xcodebuild -version
+          test "$(xcodebuild -version | sed -n '1s/^Xcode //p')" = "26.6"
+
+      # The Xcode project is generated from project.yml and is not committed
+      # (see .gitignore) — regenerate it before building.
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # Runs the same filtered wrapper documented in CLAUDE.md. It preserves
+      # xcodebuild's exit code, so a build or test failure fails the job.
+      # The wrapper owns the simulator destination so this is identical to a
+      # local `scripts/xbuild.sh test` invocation.
+      - name: Run unit tests
+        run: scripts/xbuild.sh test
