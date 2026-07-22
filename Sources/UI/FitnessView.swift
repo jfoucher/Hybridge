@@ -1,5 +1,6 @@
 import SwiftUI
 import Charts
+import UIKit
 
 /// Fitness tab — "Warm brass" redesign. Themed cards over the existing
 /// FitnessStore / HealthKitExporter data; Swift Charts restyled to the palette.
@@ -566,16 +567,17 @@ private extension View {
     }
 }
 
-/// Native chart scrolling handles one-finger horizontal movement. The
-/// simultaneous magnification gesture changes the visible time duration while
-/// keeping the current midpoint stable, producing a map-like pinch interaction.
+/// Native chart scrolling handles one-finger horizontal movement. A UIKit
+/// pinch recognizer supplies both magnification and the moving two-finger
+/// centroid, which SwiftUI's scalar `MagnificationGesture` does not expose.
 private struct FitnessChartViewportModifier: ViewModifier {
     let domain: ClosedRange<Date>
     @Binding var visibleDuration: TimeInterval
     @Binding var scrollPosition: Date
 
     @State private var gestureStartDuration: TimeInterval?
-    @State private var gestureStartCenter: Date?
+    @State private var gestureAnchorDate: Date?
+    @State private var pinchActive = false
 
     private let minimumDuration: TimeInterval = 2 * 3600
 
@@ -584,43 +586,143 @@ private struct FitnessChartViewportModifier: ViewModifier {
             .chartXScale(domain: domain)
             .chartScrollableAxes(.horizontal)
             .chartXVisibleDomain(length: visibleDuration)
-            .chartScrollPosition(x: $scrollPosition)
-            .simultaneousGesture(
-                MagnificationGesture()
-                    .onChanged { magnification in
-                        beginGestureIfNeeded()
-                        guard let startDuration = gestureStartDuration,
-                              let center = gestureStartCenter else { return }
-
-                        let fullDuration = domain.upperBound.timeIntervalSince(domain.lowerBound)
-                        let nextDuration = min(fullDuration,
-                                               max(minimumDuration,
-                                                   startDuration / Double(magnification)))
-                        visibleDuration = nextDuration
-                        scrollPosition = clampedStart(
-                            center.addingTimeInterval(-nextDuration / 2),
-                            duration: nextDuration
-                        )
-                    }
-                    .onEnded { _ in
-                        gestureStartDuration = nil
-                        gestureStartCenter = nil
-                    }
-            )
+            .chartScrollPosition(x: Binding(
+                get: { scrollPosition },
+                // The chart's own scroll pan may also see a two-finger touch.
+                // Ignore those writes while our combined pinch is authoritative.
+                set: { if !pinchActive { scrollPosition = $0 } }
+            ))
+            .overlay {
+                ChartPinchCatcher(
+                    onBegan: { fraction in beginGesture(at: fraction) },
+                    onChanged: { magnification, fraction in
+                        updateGesture(magnification: magnification,
+                                      centroidFraction: fraction)
+                    },
+                    onEnded: { endGesture() }
+                )
+                .allowsHitTesting(false)
+            }
     }
 
-    private func beginGestureIfNeeded() {
-        guard gestureStartDuration == nil else { return }
+    private func beginGesture(at centroidFraction: CGFloat) {
         let fullDuration = domain.upperBound.timeIntervalSince(domain.lowerBound)
         let duration = min(visibleDuration, fullDuration)
         gestureStartDuration = duration
         let start = clampedStart(scrollPosition, duration: duration)
-        gestureStartCenter = start.addingTimeInterval(duration / 2)
+        gestureAnchorDate = start.addingTimeInterval(duration * Double(centroidFraction))
+        pinchActive = true
+    }
+
+    private func updateGesture(magnification: CGFloat, centroidFraction: CGFloat) {
+        guard let startDuration = gestureStartDuration,
+              let anchorDate = gestureAnchorDate else { return }
+
+        let fullDuration = domain.upperBound.timeIntervalSince(domain.lowerBound)
+        let scale = max(Double(magnification), 0.01)
+        let nextDuration = min(fullDuration,
+                               max(minimumDuration, startDuration / scale))
+        visibleDuration = nextDuration
+        // Preserve the time originally under the pinch centroid. If both
+        // fingers translate, the changing fraction pans the viewport too.
+        scrollPosition = clampedStart(
+            anchorDate.addingTimeInterval(-nextDuration * Double(centroidFraction)),
+            duration: nextDuration
+        )
+    }
+
+    private func endGesture() {
+        gestureStartDuration = nil
+        gestureAnchorDate = nil
+        pinchActive = false
     }
 
     private func clampedStart(_ proposed: Date, duration: TimeInterval) -> Date {
         let latest = domain.upperBound.addingTimeInterval(-duration)
         return min(max(proposed, domain.lowerBound), latest)
+    }
+}
+
+/// Geometry-only anchor whose pinch recognizer lives on the window. Keeping
+/// the anchor out of hit-testing preserves the chart's one-finger scroll and
+/// tap selection; the recognizer accepts only pinches beginning inside it.
+private struct ChartPinchCatcher: UIViewRepresentable {
+    let onBegan: (CGFloat) -> Void
+    let onChanged: (_ magnification: CGFloat, _ centroidFraction: CGFloat) -> Void
+    let onEnded: () -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> AnchorView {
+        let view = AnchorView()
+        view.backgroundColor = .clear
+        view.isUserInteractionEnabled = false
+        let pinch = UIPinchGestureRecognizer(target: context.coordinator,
+                                             action: #selector(Coordinator.handlePinch(_:)))
+        pinch.delegate = context.coordinator
+        view.pinch = pinch
+        context.coordinator.anchor = view
+        return view
+    }
+
+    func updateUIView(_ uiView: AnchorView, context: Context) {
+        context.coordinator.onBegan = onBegan
+        context.coordinator.onChanged = onChanged
+        context.coordinator.onEnded = onEnded
+    }
+
+    static func dismantleUIView(_ uiView: AnchorView, coordinator: Coordinator) {
+        if let pinch = uiView.pinch { pinch.view?.removeGestureRecognizer(pinch) }
+    }
+
+    final class AnchorView: UIView {
+        var pinch: UIPinchGestureRecognizer?
+
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            guard let pinch else { return }
+            pinch.view?.removeGestureRecognizer(pinch)
+            if let window { window.addGestureRecognizer(pinch) }
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var onBegan: (CGFloat) -> Void = { _ in }
+        var onChanged: (CGFloat, CGFloat) -> Void = { _, _ in }
+        var onEnded: () -> Void = {}
+        weak var anchor: UIView?
+
+        @objc func handlePinch(_ pinch: UIPinchGestureRecognizer) {
+            switch pinch.state {
+            case .began:
+                onBegan(centroidFraction(of: pinch))
+            case .changed:
+                onChanged(pinch.scale, centroidFraction(of: pinch))
+            case .ended, .cancelled, .failed:
+                onEnded()
+            default:
+                break
+            }
+        }
+
+        private func centroidFraction(of pinch: UIPinchGestureRecognizer) -> CGFloat {
+            guard let anchor, anchor.bounds.width > 0 else { return 0.5 }
+            let fraction = pinch.location(in: anchor).x / anchor.bounds.width
+            return min(max(fraction, 0), 1)
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldReceive touch: UITouch) -> Bool {
+            guard let anchor, anchor.window != nil else { return false }
+            return anchor.bounds.contains(touch.location(in: anchor))
+        }
+
+        func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                               shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            // Let an already-tracking chart/scroll pan finish arbitration; its
+            // binding writes are suppressed while the pinch is active.
+            other is UIPanGestureRecognizer
+        }
     }
 }
 
