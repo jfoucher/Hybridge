@@ -311,21 +311,37 @@ extension WatchManager {
         }
     }
 
+    /// Vibrates a Q hybrid to be found and waits for the middle-button
+    /// acknowledgement. Returns whether the user pressed a button; a lapsed
+    /// vibration window surfaces as `FossilError.timeout` from `run`, which we
+    /// map to "not confirmed" rather than an error. The button press already
+    /// stops the vibration watch-side; the stop write covers the timeout path
+    /// (and is harmless after a press).
+    @discardableResult
+    func findQWatch() async throws -> Bool {
+        return try await WatchSession.exclusive(for: connectionTokenSync()) {
+            let request = QConfirmOnDeviceRequest()
+            do {
+                try await self.run(request)
+            } catch FossilError.timeout {
+                // No press within the watch's ~30 s window — leave unconfirmed.
+            }
+            try? await self.run(QVibrateRequest(start: false))
+            self.addLog(request.confirmed ? "Find watch: confirmed on watch" : "Find watch: timed out")
+            return request.confirmed
+        }
+    }
+
     /// Vibrates the active watch so it can be found, branching per family
-    /// shared by the Dashboard Find affordance
-    /// and My Watches' row action so the two don't drift. The HR confirms via
-    /// a button press within its timeout (`nil` = no confirmation exists for
-    /// this family, i.e. Q); the Q hybrids have no confirm command, so this
-    /// just vibrates for a few seconds then stops.
+    /// shared by the Dashboard Find affordance and My Watches' row action so
+    /// the two don't drift. Both families confirm via a button press within
+    /// the vibration window (HR: `findWatch`; Q: `findQWatch`).
     func findActiveWatchAndConfirm() async throws -> Bool? {
         let token = connectionTokenSync()
         return try await WatchSession.exclusive(for: token) {
             guard let token = WatchSession.connectionToken else { throw FossilError.staleConnection }
-            if token.kind.needsAuthKey { return try await self.findWatch() }
-            try await self.vibrateWatch(true)
-            try? await Task.sleep(for: .seconds(8))
-            try await self.vibrateWatch(false)
-            return nil
+            return token.kind.needsAuthKey ? try await self.findWatch()
+                                           : try await self.findQWatch()
         }
     }
 
