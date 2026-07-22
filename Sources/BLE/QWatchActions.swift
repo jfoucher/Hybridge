@@ -75,6 +75,7 @@ extension WatchManager {
             // right away instead of waiting for the next maintenance tick.
             await QuietHoursManager.shared.evaluate()
             await syncActivityIfDue()
+            await pushDailyStepBaseline()
         } catch {
             guard stillActive() else { return }
             addLog("Q init failed: \(error.localizedDescription)")

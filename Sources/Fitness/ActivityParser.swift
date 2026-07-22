@@ -82,7 +82,7 @@ struct ActivityParser {
     }
 
     private mutating func run(_ file: Data) throws {
-        guard file.count > 56 else { throw ParseError.tooShort }
+        guard file.count >= 56 else { throw ParseError.tooShort }
         let version = Int(file.u16LE(at: 2))
         guard version == 22 else { throw ParseError.unsupportedVersion(version) }
         currentTimestamp = Int(file.u32LE(at: 8))

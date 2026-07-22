@@ -53,6 +53,16 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
     }
     @Published private(set) var liveStepCountsByWatch: [UUID: LiveStepCount] = [:]
 
+    /// The cross-watch total written into a watch's own step register right
+    /// after connecting (mirrors the official app pushing the day's combined
+    /// total so a watch you just switched to shows the right total instead of
+    /// only what it counted itself). Once pushed, that watch's live reading
+    /// is no longer "its own synced steps + steps since last sync" — it's
+    /// "the whole day's total as of the push + steps since" — so
+    /// `stepsIncludingLive` must subtract this instead of the synced-samples
+    /// total for that watch, or the pushed total gets added a second time.
+    private var pushedStepBaselineByWatch: [UUID: Int] = [:]
+
     /// Most recent sync across all watches (the Fitness screen label).
     var lastSyncDate: Date? { lastSyncByWatch.values.max() }
 
@@ -768,13 +778,27 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
         var total = summary(onDay: day, calendar: calendar).steps
         for (watchID, live) in liveStepCountsByWatch
         where calendar.isDate(live.observedAt, inSameDayAs: day) {
-            total += max(0, live.count - syncedByWatch[watchID, default: 0])
+            // Whichever is larger: this watch's own synced-samples total, or
+            // the aggregate we last pushed into its register. Early after a
+            // push the pushed baseline dominates (it already folds in every
+            // watch's contribution); as this watch's own minute samples
+            // eventually sync past that figure, they take over — either way
+            // the subtraction only ever removes steps already counted once.
+            let baseline = max(syncedByWatch[watchID, default: 0],
+                               pushedStepBaselineByWatch[watchID, default: 0])
+            total += max(0, live.count - baseline)
         }
         return total
     }
 
     func recordLiveStepCount(_ count: Int, for watchID: UUID, at date: Date = Date()) {
         liveStepCountsByWatch[watchID] = LiveStepCount(count: max(0, count), observedAt: date)
+    }
+
+    /// Records the total we just wrote into `watchID`'s step register. See
+    /// `pushedStepBaselineByWatch`.
+    func recordPushedStepBaseline(_ total: Int, for watchID: UUID) {
+        pushedStepBaselineByWatch[watchID] = total
     }
 
     func hasLiveStepCount(onDay day: Date, calendar: Calendar = .current) -> Bool {

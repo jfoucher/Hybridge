@@ -1164,10 +1164,16 @@ final class ActivityParserTests: XCTestCase {
         let parser = try ActivityParser.parse(file)
         XCTAssertTrue(parser.isComplete)
         XCTAssertEqual(parser.samples.count, 1)
-        for length in 0..<file.count {
+        for length in 0..<file.count where length != 56 {
             XCTAssertThrowsError(try ActivityParser.parse(file.prefix(length)),
                                  "truncated valid HR fixture parsed at length \(length)")
         }
+        // 56 bytes (52-byte header/marker-stream start + 4-byte trailing CRC,
+        // zero records) is the minimum valid file, not a truncation of this
+        // one — a watch with no samples yet produces exactly this file.
+        let empty = try ActivityParser.parse(file.prefix(56))
+        XCTAssertTrue(empty.isComplete)
+        XCTAssertEqual(empty.samples.count, 0)
     }
 
     /// Builds a synthetic no-HR-variant activity file: version 22, timestamp
@@ -1204,10 +1210,16 @@ final class ActivityParserTests: XCTestCase {
         XCTAssertEqual(parser.samples[1].timestamp, Int(timestamp) + 60)
         XCTAssertFalse(parser.samples[1].isActive)
         XCTAssertEqual(parser.samples[2].stepCount, 50)
-        for length in 0..<file.count {
+        for length in 0..<file.count where length != 56 {
             XCTAssertThrowsError(try ActivityParser.parse(file.prefix(length)),
                                  "truncated valid no-HR fixture parsed at length \(length)")
         }
+        // 56 bytes lands exactly on the second record's end (44 + 2*4 + 4
+        // trailing CRC) — a clean 2-record file, not a truncation of the
+        // 3-record one.
+        let partial = try ActivityParser.parse(file.prefix(56))
+        XCTAssertTrue(partial.isComplete)
+        XCTAssertEqual(partial.samples.count, 2)
     }
 
     func testRejectsWrongVersion() {

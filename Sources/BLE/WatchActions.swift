@@ -115,6 +115,7 @@ extension WatchManager {
             // right away instead of waiting for the next maintenance tick.
             await QuietHoursManager.shared.evaluate()
             await syncActivityIfDue()
+            await pushDailyStepBaseline()
             await refreshActiveWatchfaceImage()
         } catch {
             guard stillActive() else { return }
@@ -884,6 +885,31 @@ extension WatchManager {
             return
         }
         try await readConfiguration()
+    }
+
+    /// Writes the combined cross-watch step total into the watch we just
+    /// connected to (config item 0x02) — the same behavior observed from the
+    /// official app: switching watches pushes the running total into the
+    /// newly active one so its own dial/hand display reflects the whole
+    /// day, not just what it counted since it was last worn. Must run after
+    /// `syncActivityIfDue()` so this watch's own pending minute samples are
+    /// folded into the total before it becomes the floor recorded in
+    /// `FitnessStore.recordPushedStepBaseline` (see that doc comment for why
+    /// the floor matters — otherwise the pushed total gets counted twice).
+    func pushDailyStepBaseline() async {
+        guard let watchID = WatchSession.connectionToken?.watchID else { return }
+        let total = await MainActor.run { FitnessStore.shared.steps(onDay: Date()) }
+        do {
+            try await writeConfig([.currentStepCount(UInt32(total))])
+            await MainActor.run {
+                FitnessStore.shared.recordPushedStepBaseline(total, for: watchID)
+                FitnessStore.shared.recordLiveStepCount(total, for: watchID)
+                self.watchStepCount = total
+            }
+            addLog("Step counter synced to watch: \(total)")
+        } catch {
+            addLog("Step counter sync failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Hand calibration
