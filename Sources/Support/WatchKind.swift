@@ -56,10 +56,8 @@ enum WatchKind: String, Codable {
     var hasDisplay: Bool { self == .hybridHR || self == .unknown }
     var hasWatchfaces: Bool { hasDisplay }
     var hasApps: Bool { hasDisplay }
-    var hasCustomMenu: Bool { hasDisplay }
     var hasJsonPush: Bool { hasDisplay }
     var hasTranslations: Bool { hasDisplay }
-    var hasCommute: Bool { hasDisplay }
     var hasWeather: Bool { hasDisplay && HardwareValidation.watchWeather }
     var hasCalendar: Bool { hasDisplay }
     var hasQuietHours: Bool { self != .fossilQ || HardwareValidation.qQuietHours }

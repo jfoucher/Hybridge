@@ -122,10 +122,6 @@ struct SettingsView: View {
                     navRow(icon: "app.badge", title: "Apps", destination: { AppsView() })
                     Hairline(leading: 59)
                     navRow(icon: "hand.tap", title: "Button assignments", destination: { ButtonsView() })
-                    Hairline(leading: 59)
-                    navRow(icon: "car", title: "Commute destinations", destination: { CommuteView() })
-                    Hairline(leading: 59)
-                    navRow(icon: "list.bullet", title: "On-watch menu", destination: { MenuView() })
                 } else if kind.hasHandNotificationConfig {
                     Hairline(leading: 59)
                     navRow(icon: "bell.badge", title: "Notifications", destination: { QNotificationsView() })

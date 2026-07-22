@@ -509,18 +509,14 @@ enum ButtonConfig {
         return result
     }
 
-    /// The union of every app name referenced by a button assignment or a
-    /// menu `openApp` item — the set a watch switch needs re-uploaded if
-    /// missing, so a global button/menu config keeps working on a watch that
-    /// never had the app installed. Built-in apps (weatherApp, musicApp…)
-    /// fall out naturally: they're never uploaded, so never cached, so
-    /// intersecting this set against the on-disk cache excludes them without
-    /// needing to special-case them here.
-    static func referencedAppNames(buttonSelections: [ButtonSelection],
-                                   menuItems: [WatchMenuItem]) -> Set<String> {
-        var names = Set(buttonSelections.map(\.appName).filter { !$0.isEmpty })
-        names.formUnion(menuItems.filter { $0.kind == .openApp }.map(\.text).filter { !$0.isEmpty })
-        return names
+    /// The set of every app name referenced by a button assignment — the set a
+    /// watch switch needs re-uploaded if missing, so a global button config
+    /// keeps working on a watch that never had the app installed. Built-in apps
+    /// (weatherApp, musicApp…) fall out naturally: they're never uploaded, so
+    /// never cached, so intersecting this set against the on-disk cache excludes
+    /// them without needing to special-case them here.
+    static func referencedAppNames(buttonSelections: [ButtonSelection]) -> Set<String> {
+        Set(buttonSelections.map(\.appName).filter { !$0.isEmpty })
     }
 
     /// Firmware event strings for a button/press. Short presses emit BOTH the
@@ -616,19 +612,6 @@ enum JsonPayloads {
     static func buttonConfig(_ assignments: [ButtonAssignment]) -> Data {
         pushSet(key: "master._.config.buttons",
                 value: assignments.map { ["button_evt": $0.event, "name": $0.appName] })
-    }
-
-    // MARK: - Commute (GB: CommuteConfigPutRequest / SetCommuteMenuMessage)
-
-    /// {"push":{"set":{"commuteApp._.config.destinations":["Home","Work"]}}}
-    static func commuteDestinations(_ destinations: [String]) -> Data {
-        pushSet(key: "commuteApp._.config.destinations", value: destinations)
-    }
-
-    /// The status line shown on the watch after a commute event is answered.
-    /// `type` is "in_progress" while navigating, "end" to dismiss.
-    static func commuteMessage(_ message: String, type: String = "in_progress") -> Data {
-        pushSet(key: "commuteApp._.config.commute_info", value: ["message": message, "type": type])
     }
 
     /// {"res":{"id":id,"set":{...}}} — a reply correlated to a watch request.

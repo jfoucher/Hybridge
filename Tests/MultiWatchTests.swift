@@ -216,15 +216,13 @@ final class AppMigrationsTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: AppMigrations.fitnessLegacyOwnerKey), watchID.uuidString)
     }
 
-    func testConvertsLegacyCommuteStringList() throws {
+    func testClearsRemovedLegacyCommuteKey() {
         defaults.set(watchID.uuidString, forKey: "rememberedPeripheralID")
         defaults.set(["Home", "Work"], forKey: "commuteDestinations")
 
         AppMigrations.run(defaults: defaults)
 
-        let data = try XCTUnwrap(defaults.data(forKey: "commuteDestinations2"))
-        let items = try JSONDecoder().decode([CommuteDestination].self, from: data)
-        XCTAssertEqual(items.map(\.name), ["Home", "Work"])
+        // The commute feature was removed; its legacy key must be cleaned up.
         XCTAssertNil(defaults.object(forKey: "commuteDestinations"))
     }
 

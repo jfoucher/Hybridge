@@ -187,11 +187,6 @@ final class WatchRegistry: ObservableObject {
 enum WatchScopedKey: String, CaseIterable {
     case storedAlarms
     case buttonSelections
-    case commuteDestinations2
-    case watchMenuItems
-    case watchMenuTitle
-    case watchMenuOpenSlot
-    case watchMenuEnabled
     case watchTranslations
     case notificationIconEntries
     case notificationIconsEnabled

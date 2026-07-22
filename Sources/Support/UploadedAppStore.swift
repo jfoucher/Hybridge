@@ -3,10 +3,10 @@ import Foundation
 /// Caches the bytes of every watch app uploaded to any Hybrid HR, keyed by
 /// name, so a second watch that doesn't have the app yet can be re-uploaded
 /// to from cached bytes instead of needing the source watch (which isn't
-/// connected during a switch). Global like `ButtonStore`/`MenuStore` — the
-/// button/menu config that references these apps is shared across watches
-/// too. Watchfaces are never cached here; only apps referenced by a button
-/// assignment or menu `openApp` item need to survive a watch switch.
+/// connected during a switch). Global like `ButtonStore` — the button config
+/// that references these apps is shared across watches too. Watchfaces are
+/// never cached here; only apps referenced by a button assignment need to
+/// survive a watch switch.
 ///
 /// Follows `WatchfaceStore`'s plain-JSON-in-Documents shape, with the
 /// file-protection / backup-exclusion hardening from `FitnessStore` so a

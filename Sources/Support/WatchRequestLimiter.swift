@@ -11,7 +11,6 @@ final class WatchRequestLimiter: @unchecked Sendable {
         case frame
         case homeAssistant
         case weather
-        case menuRefresh
     }
 
     private struct State {

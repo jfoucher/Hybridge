@@ -704,7 +704,7 @@ final class WappBuilderTests: XCTestCase {
         "color":"white","goal_ring":false,"bg":"wbg_thin_circle_fill0.rle"},\
         {"type":"comp","name":"widgetDate","pos":{"x":58,"y":120},"size":{"w":76,"h":76},\
         "color":"black","goal_ring":false,"bg":"wbg_solid1.rle"}\
-        ],"config":{},"menu_structure":{}}
+        ],"config":{}}
         """
         let wapp = WappBuilder.assembleWapp(version: (1, 13),
                                             code: [("Face", Data([0x01]))],
@@ -1058,48 +1058,6 @@ final class WappBuilderTests: XCTestCase {
         XCTAssertFalse(layoutNames.contains("text_layout"))
     }
 
-
-    /// menu_structure schema per open_source_watchface.js: root object with
-    /// label + action_handlers; the open handler is a submenu holding the
-    /// items and an auto-added back handler on a free slot.
-    func testMenuStructureShape() throws {
-        let wasEnabled = MenuStore.isEnabled
-        MenuStore.isEnabled = true
-        MenuStore.title = "Menu"
-        MenuStore.openSlot = "top_hold"
-        MenuStore.items = [
-            WatchMenuItem(slot: "top_short_press_release", label: "Hello",
-                          kind: .showMessage, text: "Hi there"),
-            WatchMenuItem(slot: "bottom_short_press_release", label: "Ring",
-                          kind: .sendToPhone, phoneAction: .findPhone),
-        ]
-        defer {
-            MenuStore.items = []
-            MenuStore.title = "Menu"
-            MenuStore.isEnabled = wasEnabled
-        }
-
-        let structure = MenuStore.menuStructure()
-        XCTAssertEqual(structure["label"] as? String, "Menu")
-        let rootHandlers = try XCTUnwrap(structure["action_handlers"] as? [[String: Any]])
-        XCTAssertEqual(rootHandlers.count, 1)
-        let open = rootHandlers[0]
-        XCTAssertEqual(open["action"] as? String, "top_hold")
-        XCTAssertEqual(open["is_submenu"] as? Bool, true)
-
-        let handlers = try XCTUnwrap(open["action_handlers"] as? [[String: Any]])
-        XCTAssertEqual(handlers.count, 3)   // 2 items + back
-        XCTAssertEqual(handlers[0]["message_displayed_on_action"] as? String, "Hi there")
-        XCTAssertEqual(handlers[1]["data_sent_on_action"] as? String, "Ring")
-        let back = handlers[2]
-        XCTAssertEqual(back["action_goes_back"] as? Bool, true)
-        // Back landed on a slot the items don't use.
-        XCTAssertEqual(back["action"] as? String, "middle_short_press_release")
-
-        MenuStore.isEnabled = false
-        XCTAssertTrue(MenuStore.menuStructure().isEmpty,
-                      "Disabling an uploaded menu must clear stale handlers")
-    }
 
     func testCustomWidgetTextPayload() throws {
         let json = try XCTUnwrap(JSONSerialization.jsonObject(
@@ -1549,26 +1507,6 @@ final class ButtonConfigTests: XCTestCase {
         let picks = [ButtonSelection(button: .top, press: .short, appName: "workoutApp")]
         let a = ButtonConfig.assignments(userSelections: picks, installed: [], firmware: nil)
         XCTAssertTrue(a.contains(ButtonAssignment(event: "top_short_press_release", appName: "workoutApp")))
-    }
-}
-
-final class CommuteTests: XCTestCase {
-    private func decode(_ data: Data) -> [String: Any]? {
-        (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
-    }
-
-    func testCommuteDestinationsShape() {
-        let root = decode(JsonPayloads.commuteDestinations(["Home", "Work"]))
-        let set = (root?["push"] as? [String: Any])?["set"] as? [String: Any]
-        XCTAssertEqual(set?["commuteApp._.config.destinations"] as? [String], ["Home", "Work"])
-    }
-
-    func testCommuteMessageShape() {
-        let root = decode(JsonPayloads.commuteMessage("On your way to Home"))
-        let set = (root?["push"] as? [String: Any])?["set"] as? [String: Any]
-        let info = set?["commuteApp._.config.commute_info"] as? [String: Any]
-        XCTAssertEqual(info?["message"] as? String, "On your way to Home")
-        XCTAssertEqual(info?["type"] as? String, "in_progress")
     }
 }
 

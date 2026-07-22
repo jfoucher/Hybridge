@@ -47,12 +47,7 @@ enum AppMigrations {
                 defaults.removeObject(forKey: base)
             }
         }
-        let commuteKey = WatchScoped.key(.commuteDestinations2, watchID: id)
-        if defaults.object(forKey: commuteKey) == nil,
-           let legacy = defaults.stringArray(forKey: "commuteDestinations") {
-            let items = legacy.map { CommuteDestination(name: $0) }
-            defaults.set(try? JSONEncoder().encode(items), forKey: commuteKey)
-        }
+        // The removed commute feature's legacy key is cleared if still present.
         defaults.removeObject(forKey: "commuteDestinations")
         defaults.set(id.uuidString, forKey: fitnessLegacyOwnerKey)
     }
@@ -68,8 +63,7 @@ enum AppMigrations {
         let sharedKeys: [WatchScopedKey] = [
             .vibrationStrength,
             .bodyHeightCm, .bodyWeightKg, .bodyGender, .bodyBirth,
-            .buttonSelections, .commuteDestinations2,
-            .watchMenuItems, .watchMenuTitle, .watchMenuOpenSlot, .watchMenuEnabled,
+            .buttonSelections,
             .notificationIconEntries, .notificationIconsEnabled, .notificationAllApps,
             .qNotificationAlerts, .qButtonFunctions, .qMultiPressActions,
             .quietSchedule, .quietOverride,

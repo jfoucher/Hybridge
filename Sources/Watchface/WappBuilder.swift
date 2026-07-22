@@ -168,7 +168,6 @@ struct WappBuilder {
         configuration["config"] = config
         configuration["widgets"] = generated.widgetMeta
         configuration["text_layers"] = generated.textLayerMeta
-        configuration["menu_structure"] = [:] as [String: Any]
 
         let data = try JSONSerialization.data(withJSONObject: configuration)
         return String(data: data, encoding: .utf8) ?? "{}"

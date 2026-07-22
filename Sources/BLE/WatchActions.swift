@@ -75,14 +75,9 @@ extension WatchManager {
             let defaults = UserDefaults.standard
             if defaults.data(forKey: WatchScopedKey.buttonSelections.rawValue) != nil {
                 try? await setButtons(ButtonStore.selections)
-            } else if defaults.data(forKey: WatchScopedKey.commuteDestinations2.rawValue) != nil {
-                try? await pushCommuteDestinations()
             }
             if NotificationIconStore.shared.isEnabled {
                 try? await setNotificationConfigurations()
-            }
-            if MenuStore.hasStoredConfiguration {
-                try? await pushMenuStructure()
             }
             let upperKey = WatchScoped.key(.customWidgetUpper)
             let lowerKey = WatchScoped.key(.customWidgetLower)
@@ -350,14 +345,6 @@ extension WatchManager {
         addLog("Custom widget \(index) text updated")
     }
 
-    /// Pushes the custom on-watch menu. The
-    /// watchface asks for it again after a reinstall via
-    /// {"req":{"custom_menu":"request_config"}} — answered automatically.
-    func pushMenuStructure() async throws {
-        try await pushJson(JsonPayloads.pushSet(key: "customWatchFace._.config.menu_structure",
-                                                value: MenuStore.menuStructure()))
-        addLog("Menu structure pushed (\(MenuStore.items.count) items)")
-    }
 
     // MARK: - Notification icons
 
@@ -745,7 +732,7 @@ extension WatchManager {
         }
     }
 
-    /// Re-uploads any app referenced by the global button/menu config that
+    /// Re-uploads any app referenced by the global button config that
     /// isn't installed on the active watch yet, using bytes cached from a
     /// previous upload to another watch. The config itself is shared across
     /// every compatible watch, but app bytes live only on whichever watch
@@ -757,8 +744,7 @@ extension WatchManager {
         let watchID = WatchRegistry.activeWatchIDSync()
         func stillActive() -> Bool { WatchRegistry.activeWatchIDSync() == watchID }
         let referenced = ButtonConfig.referencedAppNames(
-            buttonSelections: ButtonStore.selections,
-            menuItems: MenuStore.isEnabled ? MenuStore.items : [])
+            buttonSelections: ButtonStore.selections)
         let installed = await MainActor.run { Set(self.installedApps.map(\.name)) }
         for name in referenced where !installed.contains(name) {
             guard stillActive() else { return }
@@ -768,13 +754,12 @@ extension WatchManager {
         }
     }
 
-    // MARK: - Buttons & commute
+    // MARK: - Buttons
 
     /// Pushes the physical-button → app mapping (`master._.config.buttons`).
     /// Persists the selection, filters it against installed apps (workoutApp
-    /// is firmware-built-in and always allowed), resolves firmware-specific
-    /// event strings, and pushes commute destinations afterwards when
-    /// commuteApp is installed.
+    /// is firmware-built-in and always allowed), and resolves firmware-specific
+    /// event strings.
     func setButtons(_ selections: [ButtonSelection]) async throws {
         try await WatchSession.exclusive { try await setButtonsLocked(selections) }
     }
@@ -788,22 +773,6 @@ extension WatchManager {
         try await pushJson(JsonPayloads.buttonConfig(assignments))
         addLog("Buttons updated: " +
                assignments.map { "\($0.event)=\($0.appName)" }.joined(separator: ", "))
-        if installed.contains("commuteApp") {
-            try await pushCommuteDestinations()
-        }
-    }
-
-    /// Pushes the saved commute destination list (`commuteApp._.config.destinations`).
-    /// No-op unless commuteApp is installed.
-    func pushCommuteDestinations() async throws {
-        let installed = await MainActor.run { self.installedApps.contains { $0.name == "commuteApp" } }
-        guard installed else {
-            addLog("Skipping commute push — commuteApp not installed")
-            return
-        }
-        let destinations = CommuteStore.destinations
-        try await pushJson(JsonPayloads.commuteDestinations(destinations))
-        addLog("Commute destinations pushed (\(destinations.count))")
     }
 
     /// Battery lives in the encrypted config file (no 0x180F service on the
@@ -1105,7 +1074,7 @@ extension WatchManager {
 #endif
             return
         }
-        // Some requests (custom_menu) carry no id; GB's optInt defaults to 0.
+        // Some requests carry no id; GB's optInt defaults to 0.
         let requestId = request["id"] as? Int ?? 0
 
         var responseSet: [String: Any]?
@@ -1184,31 +1153,6 @@ extension WatchManager {
                 defer { limiter.release(.weather) }
                 await WeatherProvider.shared.respondUVWidget()
             }
-        } else if let commute = request["commuteApp._.config.commute_info"] as? [String: Any] {
-            // Destination picks from the commuteApp AND selections from the
-            // custom watchface menu both arrive here (the face reuses the
-            // commute channel for data_sent_on_action).
-            let dest = commute["dest"] as? String ?? ""
-            let action = commute["action"] as? String ?? ""
-            addLog("commute request: dest=\(dest) action=\(action)")
-            if action == "stop" {
-                Task { @MainActor in CommuteETAService.shared.stop() }
-            } else if let menuItem = MenuStore.item(forSentData: dest) {
-                handleMenuAction(menuItem)
-            } else if !dest.isEmpty {
-                Task { @MainActor in CommuteETAService.shared.startCommute(to: dest) }
-            }
-        } else if (request["custom_menu"] as? String) == "request_config" {
-            // The watchface lost its menu (reinstall/reboot) — re-push it.
-            addLog("Watchface requested menu structure")
-            if MenuStore.isEnabled,
-               limiter.acquire(.menuRefresh, limit: 1, per: 2,
-                               maximumConcurrent: 1) {
-                Task {
-                    defer { limiter.release(.menuRefresh) }
-                    try? await self.pushMenuStructure()
-                }
-            }
         } else if request["master._.config.app_status"] != nil {
             // The watch reports an app open/close (e.g. weatherApp) and expects
             // an ack (GB: ConfirmAppStatusRequest). Without it the watch retries
@@ -1225,33 +1169,5 @@ extension WatchManager {
                 Task { await self.pushJsonWhenIdle(data) }
             }
         }
-    }
-
-    /// Runs a send-to-phone item from the custom on-watch menu and answers
-    /// with a status line (SetCommuteMenuMessage shape).
-    private func handleMenuAction(_ item: WatchMenuItem) {
-        addLog("Menu action: \(item.label) (\(item.phoneAction.rawValue))")
-        let reply: String
-        switch item.phoneAction {
-        case .findPhone:
-            if PhoneFinder.shared.isRinging {
-                PhoneFinder.shared.stop()
-                reply = String(localized: "Stopped")
-            } else {
-                PhoneFinder.shared.start()
-                reply = String(localized: "Ringing phone…")
-            }
-        case .reply:
-            reply = item.text.isEmpty ? String(localized: "Done") : item.text
-        case .commuteETA:
-            // The ETA loop replaces the status line as soon as the route is
-            // computed; this ack just bridges the gap. The menu (unlike the
-            // commuteApp) can never send "stop", so the loop ends itself on
-            // arrival or after its safety timeout.
-            let destination = item.text.isEmpty ? item.label : item.text
-            Task { @MainActor in CommuteETAService.shared.startCommute(to: destination) }
-            reply = String(localized: "Getting ETA…")
-        }
-        Task { await self.pushJsonWhenIdle(JsonPayloads.commuteMessage(reply)) }
     }
 }
