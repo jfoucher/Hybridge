@@ -13,6 +13,12 @@ struct WatchfacesView: View {
     @State private var customUpper = UserDefaults.standard.string(forKey: WatchScoped.key(.customWidgetUpper)) ?? ""
     @State private var customLower = UserDefaults.standard.string(forKey: WatchScoped.key(.customWidgetLower)) ?? ""
 
+    /// True while any face — a design or a bundled one — is being pushed to the
+    /// watch. Only one upload can be in flight, so every Install button disables.
+    private var isInstalling: Bool {
+        installingDesignID != nil || installingBundledID != nil
+    }
+
     private var activeFaceHasCustomWidget: Bool {
         designs.first { $0.sanitizedName == watch.activeWatchfaceName }?
             .widgets.contains { $0.type == "widgetCustom" } ?? false
@@ -157,7 +163,7 @@ struct WatchfacesView: View {
                                     Button("Install") { install(design) }
                                         .font(Theme.sans(14, weight: .semibold, relativeTo: .subheadline))
                                         .foregroundStyle(Theme.accent)
-                                        .disabled(installingDesignID != nil)
+                                        .disabled(isInstalling)
                                 }
                             }
                             .padding(.horizontal, 16).padding(.vertical, 14)
@@ -221,7 +227,7 @@ struct WatchfacesView: View {
                                 .font(Theme.sans(14, weight: .semibold, relativeTo: .subheadline))
                                 .foregroundStyle(Theme.accent)
                                 .fixedSize()
-                                .disabled(installingBundledID != nil)
+                                .disabled(isInstalling)
                         }
                     }
                     .padding(.horizontal, 16).padding(.vertical, 14)
