@@ -99,7 +99,7 @@ Q firmware is detected but not supported). Supported:
   e.g. volume up on single press and volume down on double, on one button
 - Hand calibration for all three hands, including the small dial
 
-HR-only screens (watchfaces, apps, on-watch menu, weather, calendar,
+HR-only screens (watchfaces, apps, weather, calendar,
 translations…) are hidden while a Q watch is active.
 
 ## Multiple watches
