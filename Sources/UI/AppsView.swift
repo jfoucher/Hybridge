@@ -120,7 +120,7 @@ struct AppsView: View {
                 }
             }
         } message: {
-            Text("This deletes the app from the watch. You can reinstall it later.")
+            Text("This deletes the app from the watch. You won't be able to reinstall built-in apps.")
         }
 #if DEBUG
         .fileImporter(isPresented: $importing,
