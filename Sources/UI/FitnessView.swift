@@ -72,7 +72,9 @@ struct FitnessView: View {
 
                 group("Today") { todayCard }
                 group("Steps") { stepsCard }
-                if kind.hasHeartRate { group("Heart rate") { heartRateCard } }
+                if kind.hasHeartRate || fitness.latestHeartRate != nil {
+                    group("Heart rate") { heartRateCard }
+                }
                 group("Sleep & wellness") { sleepCard }
                     .padding(.bottom, 0)
                 Footer("Sleep and SpO₂ are inferred from movement and heart-rate samples; treat them as estimates, not medical readings.")

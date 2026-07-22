@@ -47,6 +47,14 @@ extension WatchManager {
                 adoptingNewWatch = false
                 guard stillActive() else { return }
             }
+            // Same plain control exchange as the HR path (0x01/0x02 0x16 on
+            // 3dda0002 are family-agnostic) — without this, isDevicePaired
+            // stays nil for the whole session and the dashboard reads a Q
+            // watch as "Unpaired" even when it's actually bonded.
+            if let paired = try? await checkDevicePairing(),
+               !paired, autoPairOnNextInit {
+                try? await performDevicePairing()
+            }
             autoPairOnNextInit = false
             try? await syncQSettings()
             try? await setTime()
