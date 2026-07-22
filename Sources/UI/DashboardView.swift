@@ -14,6 +14,8 @@ struct DashboardView: View {
     @State private var nameDraft = ""
     @State private var connectingSince: Date?
     @State private var carouselItem: CarouselItem?
+    @State private var pairing = false
+
     @Environment(\.floatingTabBarHeight) private var tabBarHeight
 
     /// A stuck `.connecting` (watch out of range — iOS keeps a pending
@@ -141,6 +143,7 @@ struct DashboardView: View {
                             connectionPill
                             if let battery = watch.batteryLevel { batteryPill(battery) }
                         }
+                        
                         if watch.connectionState == .ready { findButton }
                     }
                 }
@@ -200,6 +203,35 @@ struct DashboardView: View {
             await MainActor.run { findingWatch = false }
         }
     }
+    
+    private func pair() {
+        pairing = true
+        Task {
+            do {
+                try await watch.performDevicePairing()
+                await MainActor.run {
+                    ToastCenter.shared.success(String(localized: "Pairing succeeded"))
+                }
+            } catch {
+                await MainActor.run {
+                    ToastCenter.shared.error(
+                        String(localized: "Pairing: \(error.localizedDescription)"))
+                }
+            }
+            await MainActor.run { pairing = false }
+        }
+    }
+
+    
+    private var isActiveReady: Bool {
+        watch.connectionState == .ready
+    }
+    private var canManageHardware: Bool { isActiveReady && kind != .misfitQ }
+    
+    private var pairingAction: (() -> Void)? {
+        guard canManageHardware, !pairing, !(watch.isDevicePaired ?? false) else { return nil }
+        return { pair() }
+    }
 
     private var connectionPill: some View {
         HStack(spacing: 7) {
@@ -215,6 +247,9 @@ struct DashboardView: View {
         .pill()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(connState.label)
+        .onTapGesture {
+            self.pairingAction?()
+        }
     }
 
     private func batteryPill(_ level: Int) -> some View {
@@ -242,7 +277,10 @@ struct DashboardView: View {
     private var connState: (dot: Color, halo: Color, label: String) {
         switch watch.connectionState {
         case .ready:
-            return (Theme.success, Theme.success.opacity(0.16), String(localized: "Connected"))
+            if watch.isDevicePaired ?? false {
+                return (Theme.success, Theme.success.opacity(0.16), String(localized: "Connected"))
+            }
+            return (Theme.warn, Theme.warn.opacity(0.16), String(localized: "Unpaired"))
         case .bluetoothOff:
             return (Theme.warn, Theme.warn.opacity(0.16), String(localized: "Bluetooth off"))
         case .connecting where isConnectingStalled:
