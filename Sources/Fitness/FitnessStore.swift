@@ -877,6 +877,16 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
     private static let sleepVariabilityThreshold = 128
     private static let sleepMaxGapSeconds = 20 * 60
     private static let sleepMinSessionSeconds = 45 * 60
+    /// A still stretch only counts as sleep if its median heart rate is within
+    /// this many bpm of the window's resting-HR floor. Sitting motionless at a
+    /// desk is indistinguishable from sleep on movement alone (worn, no steps,
+    /// low variability, long) — but its heart rate runs well above the sleeping
+    /// floor, which is what this gate keys on. Generous enough to keep genuine
+    /// light sleep, tight enough to reject quiet desk work (typically +20 bpm).
+    private static let sleepHRMarginBPM = 15
+    /// Minimum valid HR readings inside a candidate session before the gate is
+    /// allowed to reject it. Below this we can't tell, so we keep the session.
+    private static let sleepMinHRReadings = 5
 
     /// Sleep sessions for the night ending on the morning of `day`
     /// (window: noon the day before → noon of `day`).
@@ -890,8 +900,24 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
         let windowStart = Int(windowStartDate.timeIntervalSince1970)
         let window = samples[range(from: windowStart, to: noon)]
 
+        // Resting-HR floor for this window: 5th percentile of valid readings
+        // while inactive (the same robust measure `summary` uses for the day).
+        // The noon→noon window always spans the real overnight sleep, so this
+        // anchors to the sleeping floor — daytime desk sessions sit above it.
+        let restingHR = restingHRFloor(in: window)
+
         var sessions: [SleepSession] = []
         var current: SleepSession?
+        var currentHR: [Int] = []
+
+        func finishCurrent() {
+            defer { current = nil; currentHR = [] }
+            guard let session = current, session.duration >= Self.sleepMinSessionSeconds else { return }
+            if hrLooksLikeSleep(currentHR, restingHR: restingHR) {
+                sessions.append(session)
+            }
+        }
+
         for sample in window {
             let still = sample.wearingState == 0
                 && !sample.isActive
@@ -902,18 +928,38 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
                     session.endTimestamp = sample.timestamp + 60
                     current = session
                 } else {
-                    if let session = current, session.duration >= Self.sleepMinSessionSeconds {
-                        sessions.append(session)
-                    }
+                    finishCurrent()
                     current = SleepSession(startTimestamp: sample.timestamp,
                                            endTimestamp: sample.timestamp + 60)
                 }
+                if sample.hasValidHeartRate { currentHR.append(sample.heartRate) }
             }
         }
-        if let session = current, session.duration >= Self.sleepMinSessionSeconds {
-            sessions.append(session)
-        }
+        finishCurrent()
         return sessions
+    }
+
+    /// 5th-percentile inactive heart rate within a window, or nil when there is
+    /// too little data to trust it.
+    private func restingHRFloor(in window: ArraySlice<ActivitySample>) -> Int? {
+        var candidates: [Int] = []
+        for sample in window where sample.hasValidHeartRate && !sample.isActive {
+            candidates.append(sample.heartRate)
+        }
+        guard candidates.count >= 10 else { return nil }
+        candidates.sort()
+        return candidates[candidates.count / 20]
+    }
+
+    /// Whether a candidate session's heart rate is low enough to be sleep. With
+    /// no HR baseline or too few readings we can't disprove sleep, so we keep
+    /// the session (conservative: never delete real overnight sleep just because
+    /// HR sampling was sparse — only reject when HR positively contradicts it).
+    private func hrLooksLikeSleep(_ readings: [Int], restingHR: Int?) -> Bool {
+        guard let restingHR, readings.count >= Self.sleepMinHRReadings else { return true }
+        let sorted = readings.sorted()
+        let median = sorted[sorted.count / 2]
+        return median <= restingHR + Self.sleepHRMarginBPM
     }
 
     func sleepDuration(nightEnding day: Date) -> Int {

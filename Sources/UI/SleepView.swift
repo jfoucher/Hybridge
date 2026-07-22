@@ -70,7 +70,7 @@ struct SleepView: View {
             } header: {
                 Text("Night detail")
             } footer: {
-                Text("Sleep is inferred from long still stretches while worn. \"Restful\" marks the calmest third of each session by movement variability — a rough guide, not a medical measure.")
+                Text("Sleep is inferred from long still stretches while worn and with a low heart rate — so quiet time at a desk isn't mistaken for sleep. \"Restful\" marks the calmest third of each session by movement variability — a rough guide, not a medical measure.")
             }
         }
         .navigationTitle("Sleep")
