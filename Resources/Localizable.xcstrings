@@ -7720,7 +7720,7 @@
         "fr" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Clair"
+            "value" : "Léger"
           }
         }
       }
@@ -8964,6 +8964,7 @@
       }
     },
     "No 32-character hex key found on the clipboard." : {
+      "extractionState" : "stale",
       "localizations" : {
         "de" : {
           "stringUnit" : {

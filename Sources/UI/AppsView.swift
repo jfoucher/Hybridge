@@ -8,10 +8,16 @@ struct AppsView: View {
     @State private var busyText: String?
     @State private var importing = false
     @State private var pendingFirmware: Data?
+    @State private var pendingDelete: InstalledApp?
     @State private var downloadedApp: (name: String, url: URL)?
 
     private var homeAssistantInstalled: Bool {
         watch.installedApps.contains { $0.name == "homeAssistantApp" }
+    }
+
+    private var deleteDialogShown: Binding<Bool> {
+        Binding(get: { pendingDelete != nil },
+                set: { if !$0 { pendingDelete = nil } })
     }
 
     var body: some View {
@@ -35,9 +41,7 @@ struct AppsView: View {
                     }
                     .swipeActions {
                         Button(role: .destructive) {
-                            run("Removing \(app.name)…", success: "\(app.name) removed") {
-                                try await watch.deleteApp(app)
-                            }
+                            pendingDelete = app
                         } label: { Label("Delete", systemImage: "trash") }
                         Button {
                             downloadApp(app)
@@ -106,6 +110,18 @@ struct AppsView: View {
         }
         .navigationTitle("Apps")
         .themedList()
+        .confirmationDialog("Remove app?", isPresented: deleteDialogShown,
+                            titleVisibility: .visible) {
+            Button("Remove \(pendingDelete?.name ?? "")", role: .destructive) {
+                guard let app = pendingDelete else { return }
+                pendingDelete = nil
+                run("Removing \(app.name)…", success: "\(app.name) removed") {
+                    try await watch.deleteApp(app)
+                }
+            }
+        } message: {
+            Text("This deletes the app from the watch. You can reinstall it later.")
+        }
 #if DEBUG
         .fileImporter(isPresented: $importing,
                       allowedContentTypes: [UTType(filenameExtension: "wapp") ?? .data, .data]) { result in
