@@ -662,7 +662,7 @@ extension WatchManager {
         do {
             let get = FileGetRawRequest(handle: app.fullHandle)
             try await run(get)
-            let raw = try get.validatedFileData()
+            let raw = try get.validatedFileData(expectedHandle: FossilFileHandle.appCode.rawValue)
             let image = WappReader.backgroundImage(fromWapp: raw).map {
                 WatchfacePreviewRenderer.render(background: $0,
                                                 widgets: WappReader.widgets(fromWapp: raw),
@@ -706,7 +706,7 @@ extension WatchManager {
         try await WatchSession.exclusive(for: connectionTokenSync()) {
             let get = FileGetRawRequest(handle: app.fullHandle)
             try await self.run(get)
-            return try get.validatedFileData()
+            return try get.validatedFileData(expectedHandle: FossilFileHandle.appCode.rawValue)
         }
     }
 

@@ -151,6 +151,19 @@ final class FileTransferLimitTests: XCTestCase {
         XCTAssertThrowsError(try skipped.append(packet: Data([0x81, 1]), context: "test"))
     }
 
+    func testSequenceWrapsAtSixtyFourNotOneTwentyEight() throws {
+        // Real Hybrid HR hardware wraps the packet-sequence byte back to 0
+        // after 64 packets, not 128 — a >64-packet download (e.g. a
+        // watchface .wapp preview fetch) legitimately sends sequence 0 again
+        // for its 65th packet. Regression for that exact failure.
+        var receiver = FileDownloadAccumulator()
+        try receiver.open(size: 65, context: "test")
+        for i in 0..<64 {
+            try receiver.append(packet: Data([UInt8(i), 0xAB]), context: "test")
+        }
+        XCTAssertNoThrow(try receiver.append(packet: Data([0x80, 0xAB]), context: "test"))
+    }
+
     func testCRCBeforeTerminalAndFramesAfterCompletionAreRejected() throws {
         var receiver = FileDownloadAccumulator()
         try receiver.open(size: 1, context: "test")

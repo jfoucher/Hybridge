@@ -2,7 +2,10 @@ import Foundation
 import CoreBluetooth
 
 /// Strict receiver for the Fossil file transport. The first byte of every
-/// data packet is a seven-bit sequence number; bit 7 marks the sole terminal
+/// data packet is a six-bit sequence number (bit 6 unused/reserved) that
+/// wraps at 64, not 128 — confirmed on real Hybrid HR hardware: a >64-packet
+/// download (e.g. a watchface `.wapp` preview fetch) legitimately sends
+/// sequence 0 again for its 65th packet. Bit 7 marks the sole terminal
 /// packet. A transport CRC is only meaningful after the declared number of
 /// bytes and that terminal packet have both been observed.
 struct FileDownloadAccumulator {
@@ -44,7 +47,7 @@ struct FileDownloadAccumulator {
             throw FossilError.unexpectedResponse("empty \(context) data packet")
         }
         let flag = packet.u8(at: 0)
-        let sequence = flag & 0x7F
+        let sequence = flag & 0x3F
         guard sequence == expectedSequence else {
             throw FossilError.unexpectedResponse(
                 "\(context) packet sequence \(sequence), expected \(expectedSequence)")
@@ -55,7 +58,7 @@ struct FileDownloadAccumulator {
                 "\(context) data exceeds declared size \(declaredSize)")
         }
         if payloadCount > 0 { buffer.append(packet.dropFirst()) }
-        expectedSequence = (expectedSequence &+ 1) & 0x7F
+        expectedSequence = (expectedSequence &+ 1) & 0x3F
 
         if flag & 0x80 != 0 {
             guard buffer.count == declaredSize else {
@@ -141,22 +144,27 @@ final class FileGetRawRequest: FossilRequest {
     override var idleTimeout: TimeInterval { 20 }
 
     /// Validated file content with the 12-byte header and trailing CRC removed.
-    func strippedFileData() throws -> Data {
+    /// `expectedHandle` defaults to the handle this file was fetched from, but
+    /// some formats (notably `.wapp`, whose header always carries the fixed
+    /// `FossilFileHandle.appCode` regardless of which storage slot it lives
+    /// in) bake in a different constant — pass it explicitly for those.
+    func strippedFileData(expectedHandle: UInt16? = nil) throws -> Data {
         guard let fileData else {
             throw FossilError.unexpectedResponse("file download did not complete")
         }
         return try FossilFileContainer.payload(
-            from: fileData, expectedHandle: UInt16(major) << 8 | UInt16(minor))
+            from: fileData, expectedHandle: expectedHandle ?? (UInt16(major) << 8 | UInt16(minor)))
     }
 
     /// Verifies the inner container while retaining its header for parsers
-    /// whose format offsets are relative to that header (notably activity).
-    func validatedFileData() throws -> Data {
+    /// whose format offsets are relative to that header (notably activity and
+    /// `.wapp`). See `strippedFileData` re: `expectedHandle`.
+    func validatedFileData(expectedHandle: UInt16? = nil) throws -> Data {
         guard let fileData else {
             throw FossilError.unexpectedResponse("file download did not complete")
         }
         try FossilFileContainer.validate(
-            fileData, expectedHandle: UInt16(major) << 8 | UInt16(minor))
+            fileData, expectedHandle: expectedHandle ?? (UInt16(major) << 8 | UInt16(minor)))
         return fileData
     }
 
