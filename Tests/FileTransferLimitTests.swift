@@ -160,6 +160,56 @@ final class FileTransferLimitTests: XCTestCase {
         XCTAssertThrowsError(try receiver.append(packet: Data([0x81, 8]), context: "test"))
     }
 
+    // MARK: - Stale frames for another handle
+
+    /// The watch emits its own session-timeout (opcode 9) and late open/crc
+    /// replies addressed to a *previous* transfer's handle. Because the manager
+    /// routes every frame to the current request, one of these must be ignored
+    /// rather than abort a healthy upload — otherwise the phone walks away
+    /// without closing, wedging the watch's file socket ("socket busy" on every
+    /// following open until the firmware watchdog clears it).
+    func testPutIgnoresForeignHandleTimeoutButHonorsItsOwn() throws {
+        let request = FilePutRawRequest(handle: 0x0100, file: Data(repeating: 0xAB, count: 40))
+        let io = NullIO()
+        // Open reply for our handle -> begins streaming.
+        try request.handle(uuid: FossilUUID.char0003,
+                           value: Data([0x83, 0x00, 0x01, 0x00, 0x00]), io: io)
+        // Stale opcode-9 timeout for handle 0x050A must not touch this request.
+        XCTAssertNoThrow(try request.handle(uuid: FossilUUID.char0003,
+                           value: Data([0x89, 0x0A, 0x05, 0x00]), io: io))
+        XCTAssertFalse(request.isFinished)
+        // A timeout addressed to our own handle still aborts.
+        XCTAssertThrowsError(try request.handle(uuid: FossilUUID.char0003,
+                           value: Data([0x89, 0x00, 0x01, 0x00]), io: io))
+    }
+
+    func testPutIgnoresForeignHandleCRCReply() throws {
+        let request = FilePutRawRequest(handle: 0x0100, file: Data(repeating: 0xAB, count: 40))
+        let io = NullIO()
+        try request.handle(uuid: FossilUUID.char0003,
+                           value: Data([0x83, 0x00, 0x01, 0x00, 0x00]), io: io)
+        // Late CRC reply for a previous transfer's handle — ignore, don't abort.
+        var foreignCRC = Data([0x88, 0x0A, 0x05, 0x00])
+        foreignCRC.appendUInt32LE(40)
+        foreignCRC.appendUInt32LE(0)
+        XCTAssertNoThrow(try request.handle(uuid: FossilUUID.char0003, value: foreignCRC, io: io))
+        XCTAssertFalse(request.isFinished)
+    }
+
+    func testGetIgnoresForeignHandleFrames() throws {
+        let request = FileGetRawRequest(handle: 0x0100)
+        let io = NullIO()
+        // Open/status frame for handle 0x050A must be ignored, not abort.
+        var foreignOpen = Data([0x01, 0x0A, 0x05, 0x00])
+        foreignOpen.appendUInt32LE(512)
+        XCTAssertNoThrow(try request.handle(uuid: FossilUUID.char0003, value: foreignOpen, io: io))
+        XCTAssertFalse(request.isFinished)
+        // A foreign opcode-9 timeout is likewise ignored.
+        XCTAssertNoThrow(try request.handle(uuid: FossilUUID.char0003,
+                           value: Data([0x89, 0x0A, 0x05, 0x00]), io: io))
+        XCTAssertFalse(request.isFinished)
+    }
+
     func testInnerContainerRejectsWrongLengthTrailingBytesAndCRC() throws {
         let payload = Data([1, 2, 3])
         var valid = Data()

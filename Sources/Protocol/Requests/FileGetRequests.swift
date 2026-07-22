@@ -170,6 +170,11 @@ final class FileGetRawRequest: FossilRequest {
     override func handle(uuid: CBUUID, value: Data, io: RequestIO) throws {
         if uuid == FossilUUID.char0003 {
             guard !value.isEmpty else { return }
+            // Ignore stale frames addressed to another handle — late async
+            // replies or opcode-9 session timeouts from a previous transfer.
+            // Applying them here would abort this download. Data packets carry
+            // no handle and are handled on char0004 below.
+            if value.count >= 3, value.u16LE(at: 1) != UInt16(major) << 8 | UInt16(minor) { return }
             switch value.u8(at: 0) & 0x0F {
             case 1:
                 guard value.count >= 8 else {

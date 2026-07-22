@@ -61,6 +61,16 @@ class FilePutRawRequest: FossilRequest {
 
     override func handle(uuid: CBUUID, value: Data, io: RequestIO) throws {
         guard uuid == FossilUUID.char0003, !value.isEmpty else { return }
+        // Every 3dda0003 frame addresses a handle in bytes 1-2. A frame for a
+        // *different* handle is a stale async event from an earlier transfer:
+        // the watch emits late open/crc replies and, crucially, its own
+        // session-timeout notifications (opcode 9) after we've moved on to the
+        // next request. Applying one of those here would wrongly abort a
+        // healthy upload — and because we'd then walk away without sending the
+        // close, the watch's file socket stays wedged open, so every following
+        // open returns "socket busy" until the firmware watchdog clears it.
+        // Ignore anything not addressed to this request's handle.
+        if value.count >= 3, value.u16LE(at: 1) != handle { return }
         switch value.u8(at: 0) & 0x0F {
         case 3:
             guard value.count == 5 else {
