@@ -812,6 +812,12 @@ extension WatchManager {
         try await refreshInstalledApps()
         if activateAsWatchface {
             try await activateWatchface(named: name)
+            // The listing right after the put can still show an app the watch
+            // hasn't finished evicting internally (seen as a stale extra face
+            // until the user taps Refresh); the activation round-trip gives it
+            // time to settle, so re-list once more here as a courtesy — best
+            // effort, since the install itself already succeeded.
+            try? await refreshInstalledApps()
         } else {
             // Keep the bytes so a later switch to a watch that doesn't have
             // this app can re-upload it from the cache instead of needing the
