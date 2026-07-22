@@ -240,4 +240,20 @@ final class FileTransferLimitTests: XCTestCase {
         XCTAssertThrowsError(try FossilFileContainer.validate(corrupt, expectedHandle: 0x0100))
         XCTAssertThrowsError(try FossilFileContainer.validate(valid, expectedHandle: 0x0200))
     }
+
+    /// Regression: the activity file (both HR and no-HR variants) is not a
+    /// "cooked" [handle][length@8][payload][crc32c] container — offset 8 is a
+    /// Unix timestamp, not a length — so `syncActivityLocked` and
+    /// `downloadForExportLocked` must hand it to `ActivityParser` raw rather
+    /// than through `FossilFileContainer`/`validatedFileData()`. This pins why:
+    /// a realistically-shaped activity file fails the generic container check.
+    func testActivityFileShapeFailsGenericContainerValidation() throws {
+        var activityShaped = Data()
+        activityShaped.appendUInt16LE(0x0101)              // handle
+        activityShaped.append(contentsOf: [22, 0])          // version
+        activityShaped.appendUInt32LE(0)                    // unused by the parser
+        activityShaped.appendUInt32LE(1_753_000_000)        // Unix timestamp, not a length
+        activityShaped.append(Data(repeating: 0xAB, count: 36))
+        XCTAssertThrowsError(try FossilFileContainer.validate(activityShaped, expectedHandle: 0x0101))
+    }
 }

@@ -285,6 +285,11 @@ extension WatchManager {
         let major = UInt8((handle >> 8) & 0xFF)
         let encryptedMajors: Set<UInt8> = [FossilFileHandle.configuration.major,
                                            FossilFileHandle.activity.major]
+        // The activity file is not a "cooked" [handle][length@8][payload]
+        // [crc32c] container on either family — offset 8 is a Unix timestamp,
+        // not a length (see syncActivityLocked) — so it can't go through the
+        // generic container validation the other exported handles expect.
+        let isActivity = major == FossilFileHandle.activity.major
 
         let lookup = FileLookupRequest(major: major)
         var target = handle
@@ -299,12 +304,18 @@ extension WatchManager {
             let get = FileEncryptedGetRequest(handle: target, key: key,
                                               phoneRandom: randoms.phone, watchRandom: randoms.watch)
             try await run(get)
-            return try get.validatedFileData()
+            guard let raw = get.fileData else {
+                throw FossilError.unexpectedResponse("file download did not complete")
+            }
+            return isActivity ? raw : try get.validatedFileData()
         }
 
         let get = FileGetRawRequest(handle: target)
         try await run(get)
-        return try get.validatedFileData()
+        guard let raw = get.fileData else {
+            throw FossilError.unexpectedResponse("file download did not complete")
+        }
+        return isActivity ? raw : try get.validatedFileData()
     }
 
     /// Vibrates the watch for up to 30 s so it can be found
@@ -944,6 +955,18 @@ extension WatchManager {
             await ActivityQuarantineStore.shared.noteExplicitRetry(watchID: watchID, handle: handle)
         }
 
+        // Neither variant of the activity file is a "cooked" [handle][length@8]
+        // [payload][crc32c] container: offset 8 is a Unix timestamp (byte-
+        // identical to the 0xE2 0x04 block at offset 34 in the no-HR file;
+        // confirmed by a real Q Grant dump, and matching Gadgetbridge's
+        // ActivityFileParser which reads it as a timestamp on both the HR and
+        // no-HR branches). Running the generic container's length/CRC32C
+        // check against it — as a prior broad audit pass wired in for every
+        // FileGetRawRequest/FileEncryptedGetRequest — rejects a valid file.
+        // Integrity is already guaranteed by the whole-file transport CRC32
+        // verified during download, and structure by the parser's bounds/
+        // termination checks (it excludes the trailing 4-byte CRC via
+        // file.count - 4). Hand it the raw file, as Gadgetbridge does.
         let fileData: Data
         if encrypted {
             let key = try activeWatchKey()
@@ -952,19 +975,11 @@ extension WatchManager {
             let get = FileEncryptedGetRequest(handle: handle, key: key,
                                               phoneRandom: randoms.phone, watchRandom: randoms.watch)
             try await run(get)
-            fileData = try get.validatedFileData()
+            guard let raw = get.fileData else {
+                throw FossilError.unexpectedResponse("activity download did not complete")
+            }
+            fileData = raw
         } else {
-            // Q watches: same file, plaintext (the parser's no-HR branch
-            // handles the step-only record format). Unlike the HR activity
-            // file, the no-HR file carries NO container length at offset 8 —
-            // that offset holds a Unix timestamp (byte-identical to the
-            // 0xE2 0x04 block at offset 34), confirmed by a real Q Grant dump.
-            // So the HR-style container check (length @ 8, trailing CRC32C)
-            // can't apply here; it would reject a valid file. Integrity is
-            // already guaranteed by the transport CRC32 verified during
-            // download, and structure by the parser's bounds/termination
-            // checks (it excludes the trailing 4-byte CRC via file.count - 4).
-            // Hand it the raw file, as Gadgetbridge does.
             let get = FileGetRawRequest(handle: handle)
             try await run(get)
             guard let raw = get.fileData else {
