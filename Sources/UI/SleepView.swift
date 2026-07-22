@@ -72,10 +72,70 @@ struct SleepView: View {
             } footer: {
                 Text("Sleep is inferred from long still stretches while worn and with a low heart rate — so quiet time at a desk isn't mistaken for sleep. \"Restful\" marks the calmest third of each session by movement variability — a rough guide, not a medical measure.")
             }
+
+            #if DEBUG
+            debugSection
+            #endif
         }
         .navigationTitle("Sleep")
         .themedList()
     }
+
+    #if DEBUG
+    /// Developer diagnostics: the thresholds, the minute-by-minute funnel each
+    /// filter trims (still → in the night window → heart rate not elevated), and
+    /// the resulting sessions. Compiled out of Release builds.
+    @ViewBuilder private var debugSection: some View {
+        let info = fitness.sleepDebugInfo(nightEnding: selectedNight)
+        Section {
+            LabeledContent("Resting HR floor",
+                           value: info.restingHR.map { "\($0) bpm" } ?? "n/a")
+            LabeledContent("Counts as sleep if HR ≤",
+                           value: info.hrThreshold.map { "\($0) bpm" } ?? "no HR baseline")
+            LabeledContent("HR margin", value: "+\(info.marginBPM) bpm")
+            LabeledContent("Night window", value: info.nightWindow)
+            LabeledContent("Movement threshold", value: "variability < \(info.variabilityThreshold)")
+            LabeledContent("Min session / max gap",
+                           value: "\(info.minSessionMinutes) min / \(info.maxGapMinutes) min")
+            LabeledContent("Window samples → minutes",
+                           value: "\(info.windowSampleCount) → \(info.dedupedMinuteCount)")
+            LabeledContent("Funnel (still → night → sleep)",
+                           value: "\(info.stillMinutes) → \(info.nightStillMinutes) → \(info.sleepMinutes) min")
+
+            if info.candidates.isEmpty {
+                Text("No sleep session for this night after night-window + heart-rate filtering.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                ForEach(info.candidates) { candidate in
+                    debugCandidateRow(candidate)
+                }
+            }
+        } header: {
+            Text("Debug · sleep inference")
+        } footer: {
+            Text("DEBUG builds only. The same breakdown is logged to the Xcode/Console \"SleepInference\" category.")
+        }
+    }
+
+    private func debugCandidateRow(_ candidate: FitnessStore.SleepCandidateDebug) -> some View {
+        let start = Date(timeIntervalSince1970: TimeInterval(candidate.startTimestamp))
+        let end = Date(timeIntervalSince1970: TimeInterval(candidate.endTimestamp))
+        let dash = "–"
+        let median = candidate.medianHR.map(String.init) ?? dash
+        let lo = candidate.minHR.map(String.init) ?? dash
+        let hi = candidate.maxHR.map(String.init) ?? dash
+        let hrLine = "\(candidate.durationMinutes) min · median HR \(median) [\(lo)\(dash)\(hi)] · \(candidate.hrReadingCount) readings"
+        let medVar = candidate.medianVariability.map(String.init) ?? dash
+        let maxVar = candidate.maxVariability.map(String.init) ?? dash
+        let moveLine = "movement median \(medVar) · max \(maxVar)"
+        return VStack(alignment: .leading, spacing: 2) {
+            Text("\(start, format: .dateTime.hour().minute()) – \(end, format: .dateTime.hour().minute())")
+                .font(.footnote.weight(.medium))
+            Text(hrLine).font(.caption).foregroundStyle(.secondary)
+            Text(moveLine).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    #endif
 
     private struct PhasePoint: Identifiable {
         var date: Date

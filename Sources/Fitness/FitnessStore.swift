@@ -2,6 +2,9 @@ import Foundation
 #if canImport(UIKit)
 import UIKit
 #endif
+#if DEBUG
+import os
+#endif
 
 private actor FitnessMergeGate {
     private var busy = false
@@ -874,23 +877,58 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
         var duration: Int { endTimestamp - startTimestamp }
     }
 
-    private static let sleepVariabilityThreshold = 128
+    private static let sleepVariabilityThreshold = 16
     private static let sleepMaxGapSeconds = 20 * 60
     private static let sleepMinSessionSeconds = 45 * 60
-    /// A still stretch only counts as sleep if its median heart rate is within
-    /// this many bpm of the window's resting-HR floor. Sitting motionless at a
-    /// desk is indistinguishable from sleep on movement alone (worn, no steps,
-    /// low variability, long) — but its heart rate runs well above the sleeping
-    /// floor, which is what this gate keys on. Generous enough to keep genuine
-    /// light sleep, tight enough to reject quiet desk work (typically +20 bpm).
-    private static let sleepHRMarginBPM = 15
-    /// Minimum valid HR readings inside a candidate session before the gate is
-    /// allowed to reject it. Below this we can't tell, so we keep the session.
-    private static let sleepMinHRReadings = 5
+    /// A still *minute* only counts as sleep if its heart rate is within this
+    /// many bpm of the window's resting-HR floor. Applied per minute (not to a
+    /// whole-session median) so an awake, higher-HR stretch can't ride along on
+    /// a low-HR night it was merged with — it breaks the session instead.
+    /// Kept tight (a low resting floor + a wide margin is "any calm heart rate",
+    /// which readmits quiet-awake time): the floor is ~deep-sleep HR, so +10
+    /// still spans light sleep while excluding sitting-still-awake.
+    private static let sleepHRMarginBPM = 8
+    /// How far a minute may look for the nearest HR reading before treating its
+    /// heart rate as unknown (sampling is sparse — roughly one reading / 3 min).
+    private static let sleepHRMaxAgeSeconds = 5 * 60
+    /// Sleep is only inferred inside this nightly window (local hours), because
+    /// a calm, low-heart-rate person is indistinguishable from asleep on HR and
+    /// movement alone during the day — time of day is the deciding signal. Broad
+    /// on purpose; tune here. NOTE: this trades away daytime-nap detection.
+    private static let sleepNightStartHour = 21   // 21:00 the previous evening
+    private static let sleepNightEndHour = 11      // 11:00 the following morning
 
     /// Sleep sessions for the night ending on the morning of `day`
     /// (window: noon the day before → noon of `day`).
     func sleepSessions(nightEnding day: Date, calendar: Calendar = .current) -> [SleepSession] {
+        sleepScan(nightEnding: day, calendar: calendar).candidates.map(\.session)
+    }
+
+    /// One inferred sleep session and the valid heart-rate readings inside it.
+    private struct SleepCandidate {
+        var session: SleepSession
+        var hrReadings: [Int]
+    }
+
+    /// The full result of scanning one night — the sleep sessions plus the funnel
+    /// counts the DEBUG diagnostics surface (how many minutes each filter cut).
+    private struct SleepScan {
+        var restingHR: Int?
+        var hrThreshold: Int?
+        var candidates: [SleepCandidate]
+        var windowSampleCount: Int
+        var dedupedMinuteCount: Int
+        var stillMinutes: Int         // still & worn
+        var nightStillMinutes: Int    // …and inside the night window
+        var sleepMinutes: Int         // …and heart rate not elevated
+    }
+
+    /// The shared night-scan. A minute counts as sleep when it is still (worn,
+    /// inactive, no steps, low movement), falls inside the night window, and its
+    /// nearest heart-rate reading is not elevated above the resting floor. Those
+    /// minutes are stitched into sessions (gaps ≤ `sleepMaxGapSeconds`) and kept
+    /// when ≥ `sleepMinSessionSeconds`.
+    private func sleepScan(nightEnding day: Date, calendar: Calendar) -> SleepScan {
         let dayStart = calendar.startOfDay(for: day)
         let noonDate = calendar.date(bySettingHour: 12, minute: 0, second: 0, of: dayStart)
             ?? dayStart.addingTimeInterval(12 * 3600)
@@ -900,30 +938,82 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
         let windowStart = Int(windowStartDate.timeIntervalSince1970)
         let window = samples[range(from: windowStart, to: noon)]
 
-        // Resting-HR floor for this window: 5th percentile of valid readings
-        // while inactive (the same robust measure `summary` uses for the day).
-        // The noon→noon window always spans the real overnight sleep, so this
-        // anchors to the sleeping floor — daytime desk sessions sit above it.
-        let restingHR = restingHRFloor(in: window)
+        // The night window is one contiguous interval inside a noon→noon span:
+        // [previous day 21:00, this day 11:00].
+        let prevDayStart = calendar.date(byAdding: .day, value: -1, to: dayStart)
+            ?? dayStart.addingTimeInterval(-86400)
+        let nightStart = Int((calendar.date(bySettingHour: Self.sleepNightStartHour, minute: 0, second: 0, of: prevDayStart)
+            ?? prevDayStart).timeIntervalSince1970)
+        let nightEnd = Int((calendar.date(bySettingHour: Self.sleepNightEndHour, minute: 0, second: 0, of: dayStart)
+            ?? dayStart).timeIntervalSince1970)
 
-        var sessions: [SleepSession] = []
+        // Dedup to one sample per minute — several watches / overlapping syncs
+        // record the same minute — preferring a sample with a valid HR reading.
+        var byMinute: [Int: ActivitySample] = [:]
+        for sample in window {
+            if let existing = byMinute[sample.timestamp] {
+                if sample.hasValidHeartRate && !existing.hasValidHeartRate {
+                    byMinute[sample.timestamp] = sample
+                }
+            } else {
+                byMinute[sample.timestamp] = sample
+            }
+        }
+        let minutes = byMinute.values.sorted { $0.timestamp < $1.timestamp }
+
+        let restingHR = restingHRFloor(in: minutes)
+        let hrThreshold = restingHR.map { $0 + Self.sleepHRMarginBPM }
+
+        // Sorted HR readings for nearest-neighbour lookup per minute.
+        let hrTimes = minutes.filter(\.hasValidHeartRate).map(\.timestamp)
+        let hrValues = minutes.filter(\.hasValidHeartRate).map(\.heartRate)
+        func effectiveHR(at timestamp: Int) -> Int? {
+            guard !hrTimes.isEmpty else { return nil }
+            var lo = 0, hi = hrTimes.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if hrTimes[mid] < timestamp { lo = mid + 1 } else { hi = mid }
+            }
+            var best: Int?
+            var bestDistance = Int.max
+            for index in [lo - 1, lo] where index >= 0 && index < hrTimes.count {
+                let distance = abs(hrTimes[index] - timestamp)
+                if distance < bestDistance { bestDistance = distance; best = hrValues[index] }
+            }
+            return bestDistance <= Self.sleepHRMaxAgeSeconds ? best : nil
+        }
+
+        var candidates: [SleepCandidate] = []
         var current: SleepSession?
         var currentHR: [Int] = []
+        var stillMinutes = 0, nightStillMinutes = 0, sleepMinutes = 0
 
         func finishCurrent() {
             defer { current = nil; currentHR = [] }
             guard let session = current, session.duration >= Self.sleepMinSessionSeconds else { return }
-            if hrLooksLikeSleep(currentHR, restingHR: restingHR) {
-                sessions.append(session)
-            }
+            candidates.append(SleepCandidate(session: session, hrReadings: currentHR))
         }
 
-        for sample in window {
+        for sample in minutes {
             let still = sample.wearingState == 0
                 && !sample.isActive
                 && sample.stepCount == 0
                 && sample.variability < Self.sleepVariabilityThreshold
-            if still {
+            if still { stillMinutes += 1 }
+
+            let inNight = sample.timestamp >= nightStart && sample.timestamp < nightEnd
+            if still && inNight { nightStillMinutes += 1 }
+
+            // Heart rate elevated above the resting floor → treat as awake. An
+            // unknown HR (none within range) is left as sleep-eligible, so a
+            // genuine gap in overnight sampling doesn't fragment a real session.
+            var asleep = still && inNight
+            if asleep, let hrThreshold, let hr = effectiveHR(at: sample.timestamp), hr > hrThreshold {
+                asleep = false
+            }
+
+            if asleep {
+                sleepMinutes += 1
                 if var session = current, sample.timestamp - session.endTimestamp <= Self.sleepMaxGapSeconds {
                     session.endTimestamp = sample.timestamp + 60
                     current = session
@@ -936,35 +1026,132 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
             }
         }
         finishCurrent()
-        return sessions
+
+        return SleepScan(restingHR: restingHR, hrThreshold: hrThreshold,
+                         candidates: candidates, windowSampleCount: window.count,
+                         dedupedMinuteCount: minutes.count,
+                         stillMinutes: stillMinutes, nightStillMinutes: nightStillMinutes,
+                         sleepMinutes: sleepMinutes)
     }
 
-    /// 5th-percentile inactive heart rate within a window, or nil when there is
-    /// too little data to trust it.
-    private func restingHRFloor(in window: ArraySlice<ActivitySample>) -> Int? {
-        var candidates: [Int] = []
-        for sample in window where sample.hasValidHeartRate && !sample.isActive {
-            candidates.append(sample.heartRate)
+    /// 5th-percentile inactive heart rate within the deduped minutes, or nil when
+    /// there is too little data to trust it.
+    private func restingHRFloor(in minutes: [ActivitySample]) -> Int? {
+        var readings: [Int] = []
+        for sample in minutes where sample.hasValidHeartRate && !sample.isActive {
+            readings.append(sample.heartRate)
         }
-        guard candidates.count >= 10 else { return nil }
-        candidates.sort()
-        return candidates[candidates.count / 20]
-    }
-
-    /// Whether a candidate session's heart rate is low enough to be sleep. With
-    /// no HR baseline or too few readings we can't disprove sleep, so we keep
-    /// the session (conservative: never delete real overnight sleep just because
-    /// HR sampling was sparse — only reject when HR positively contradicts it).
-    private func hrLooksLikeSleep(_ readings: [Int], restingHR: Int?) -> Bool {
-        guard let restingHR, readings.count >= Self.sleepMinHRReadings else { return true }
-        let sorted = readings.sorted()
-        let median = sorted[sorted.count / 2]
-        return median <= restingHR + Self.sleepHRMarginBPM
+        guard readings.count >= 10 else { return nil }
+        readings.sort()
+        return readings[readings.count / 20]
     }
 
     func sleepDuration(nightEnding day: Date) -> Int {
         sleepSessions(nightEnding: day).reduce(0) { $0 + $1.duration }
     }
+
+    #if DEBUG
+    // MARK: Sleep-inference diagnostics (DEBUG only)
+
+    /// Everything the sleep heuristic considered for one night, exposed so the
+    /// Sleep screen (and the log) can show *why* the result came out as it did:
+    /// the thresholds, the minute-by-minute funnel each filter trims, and the
+    /// final sessions with their heart-rate/movement stats.
+    struct SleepDebugInfo {
+        var restingHR: Int?
+        /// A still minute counts as sleep only if its heart rate ≤ this. nil when
+        /// there is no HR baseline (then HR can't veto a minute).
+        var hrThreshold: Int?
+        var marginBPM: Int
+        var variabilityThreshold: Int
+        var minSessionMinutes: Int
+        var maxGapMinutes: Int
+        var nightWindow: String
+        var windowSampleCount: Int
+        var dedupedMinuteCount: Int
+        var stillMinutes: Int
+        var nightStillMinutes: Int
+        var sleepMinutes: Int
+        var candidates: [SleepCandidateDebug]
+    }
+
+    struct SleepCandidateDebug: Identifiable {
+        var startTimestamp: Int
+        var endTimestamp: Int
+        var hrReadingCount: Int
+        var medianHR: Int?
+        var minHR: Int?
+        var maxHR: Int?
+        var medianVariability: Int?
+        var maxVariability: Int?
+        var id: Int { startTimestamp }
+        var durationMinutes: Int { (endTimestamp - startTimestamp) / 60 }
+    }
+
+    func sleepDebugInfo(nightEnding day: Date, calendar: Calendar = .current) -> SleepDebugInfo {
+        let scan = sleepScan(nightEnding: day, calendar: calendar)
+
+        let debugCandidates: [SleepCandidateDebug] = scan.candidates.map { candidate in
+            let hr = candidate.hrReadings.sorted()
+            let vars = samples[range(from: candidate.session.startTimestamp,
+                                     to: candidate.session.endTimestamp)]
+                .map(\.variability).sorted()
+            return SleepCandidateDebug(
+                startTimestamp: candidate.session.startTimestamp,
+                endTimestamp: candidate.session.endTimestamp,
+                hrReadingCount: hr.count,
+                medianHR: hr.isEmpty ? nil : hr[hr.count / 2],
+                minHR: hr.first, maxHR: hr.last,
+                medianVariability: vars.isEmpty ? nil : vars[vars.count / 2],
+                maxVariability: vars.last)
+        }
+
+        let info = SleepDebugInfo(
+            restingHR: scan.restingHR, hrThreshold: scan.hrThreshold,
+            marginBPM: Self.sleepHRMarginBPM,
+            variabilityThreshold: Self.sleepVariabilityThreshold,
+            minSessionMinutes: Self.sleepMinSessionSeconds / 60,
+            maxGapMinutes: Self.sleepMaxGapSeconds / 60,
+            nightWindow: String(format: "%02d:00–%02d:00", Self.sleepNightStartHour, Self.sleepNightEndHour),
+            windowSampleCount: scan.windowSampleCount,
+            dedupedMinuteCount: scan.dedupedMinuteCount,
+            stillMinutes: scan.stillMinutes, nightStillMinutes: scan.nightStillMinutes,
+            sleepMinutes: scan.sleepMinutes, candidates: debugCandidates)
+        logSleepDebug(info, nightEnding: day)
+        return info
+    }
+
+    private static let sleepLog = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "eu.sixpixels.hybridge",
+        category: "SleepInference")
+
+    private func logSleepDebug(_ info: SleepDebugInfo, nightEnding day: Date) {
+        let log = Self.sleepLog
+        log.debug("""
+            Sleep scan night ending \(day, privacy: .public): \
+            window samples=\(info.windowSampleCount, privacy: .public) \
+            → deduped minutes=\(info.dedupedMinuteCount, privacy: .public), \
+            restingHR=\(info.restingHR ?? -1, privacy: .public), \
+            night=\(info.nightWindow, privacy: .public), \
+            sleep-if-HR≤\(info.hrThreshold ?? -1, privacy: .public); \
+            funnel still=\(info.stillMinutes, privacy: .public) \
+            → night-still=\(info.nightStillMinutes, privacy: .public) \
+            → sleep-min=\(info.sleepMinutes, privacy: .public), \
+            sessions=\(info.candidates.count, privacy: .public)
+            """)
+        for candidate in info.candidates {
+            log.debug("""
+                  session \(candidate.startTimestamp, privacy: .public)→\
+                \(candidate.endTimestamp, privacy: .public) \
+                (\(candidate.durationMinutes, privacy: .public) min): \
+                medianHR=\(candidate.medianHR ?? -1, privacy: .public) \
+                [\(candidate.minHR ?? -1, privacy: .public)–\(candidate.maxHR ?? -1, privacy: .public)], \
+                hrReadings=\(candidate.hrReadingCount, privacy: .public), \
+                medianVar=\(candidate.medianVariability ?? -1, privacy: .public)
+                """)
+        }
+    }
+    #endif
 
     /// Minute-resolution restfulness within a session: a minute is "deep"
     /// when its movement variability is in the calmest third of the session.
