@@ -31,6 +31,11 @@ Prefer `scripts/xbuild.sh build` / `scripts/xbuild.sh test [only-testing-target]
 
 There is one scheme, `Hybridge`. BLE only works on a real iPhone (the simulator has no Bluetooth), so anything involving the watch itself can only be verified on-device via Xcode; unit tests cover the pure logic only (CRCs, AES vectors, payload/container formats, activity parsing — plus an `ActivityParser` fuzz suite that pins "never traps on malformed input").
 
+## Source control
+
+Do not ever, under any circumstance, commit any code. The user does that himself.
+Do not touch the .gitignore file, do not add and do not remove anything from the index.
+
 ## Architecture
 
 The core design is a **serialized request queue over CoreBluetooth**:
@@ -82,4 +87,5 @@ iOS notifications (SMS etc.) reach the watch via ANCS once bonded — the app is
 - The "multi-press" payloads report press type in 0x05 event frames: action 2 = single, 3 = double, 4 = long; volume executes phone-side either way (foreground-only, iOS limitation), which is what `QMultiPressStore` maps. Music-control assignment wins the 2/3/4 ambiguity (frames don't identify the source button).
 - Hand movement on Q can't step exactly 1° — `MoveHandsRequest(bumpSingleDegree:)` makes it 2°. The sub-eye is physical hand 3 and is zeroed/calibrated along with hour/minute (`hasSubEye`).
 - Q init: pairing animation → device info (file versions) → settings triple (goal/vibration/tz) → time → config read. No auth, no pairing check; whether the `[0x02, 0x16]` bonding trigger works on Q firmware is still unverified.
+- **Q activity file has no HR-style container** — do not run `FossilFileContainer` on it. The no-HR file's offset 8 holds a **Unix timestamp** (byte-identical to the `0xE2 0x04` block at offset 34), *not* a payload length; there is a trailing 4-byte CRC the parser already excludes via `file.count - 4`. Confirmed by a real Q Grant dump (524-byte file: handle `0101`, version 22, offset-8 timestamp = offset-34 timestamp, 119 records from offset 44). `syncActivityLocked` hands the raw `FileGetRawRequest.fileData` straight to `ActivityParser` on the Q path (integrity from the transport CRC32 verified during download, structure from the parser's bounds/termination checks) — as Gadgetbridge does. The HR path still uses `validatedFileData()`, whose offset-8 length *is* correct there.
 - Quiet hours' Q night filter (`QNotificationFilterFile.nightFilter()`) is a single stub `.app` entry (bundle id `eu.sixpixels.hybridge.quiet`, silent vibration, 0°) rather than an actually-empty file. **Verified on a real Q Grant**: a real (never-matching) CRC entry blocks all notifications during the night window, and restoring the day filter re-enables them — so the never-push-empty rule is satisfied without wiping the config.

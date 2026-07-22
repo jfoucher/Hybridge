@@ -1176,6 +1176,11 @@ final class ActivityParserTests: XCTestCase {
         var file = Data(count: 60)
         file[2] = 22                                   // version (u16 LE)
         let timestamp: UInt32 = 1_700_000_000
+        // The no-HR file has NO container length at offset 8 — that offset
+        // holds a Unix timestamp (byte-identical to the 0xE2 0x04 block at
+        // offset 34), confirmed by a real Q Grant dump. Set it as a timestamp
+        // to guard against reintroducing an HR-style length assumption here.
+        for i in 0..<4 { file[8 + i] = UInt8((timestamp >> (8 * UInt32(i))) & 0xFF) }
         for i in 0..<4 { file[34 + i] = UInt8((timestamp >> (8 * UInt32(i))) & 0xFF) }
         // record: varLo (even => steps = lo & 0xFE), varHi, 0xFF, flags
         let records: [[UInt8]] = [

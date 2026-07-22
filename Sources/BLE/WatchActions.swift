@@ -913,10 +913,22 @@ extension WatchManager {
             fileData = try get.validatedFileData()
         } else {
             // Q watches: same file, plaintext (the parser's no-HR branch
-            // handles the step-only record format).
+            // handles the step-only record format). Unlike the HR activity
+            // file, the no-HR file carries NO container length at offset 8 —
+            // that offset holds a Unix timestamp (byte-identical to the
+            // 0xE2 0x04 block at offset 34), confirmed by a real Q Grant dump.
+            // So the HR-style container check (length @ 8, trailing CRC32C)
+            // can't apply here; it would reject a valid file. Integrity is
+            // already guaranteed by the transport CRC32 verified during
+            // download, and structure by the parser's bounds/termination
+            // checks (it excludes the trailing 4-byte CRC via file.count - 4).
+            // Hand it the raw file, as Gadgetbridge does.
             let get = FileGetRawRequest(handle: handle)
             try await run(get)
-            fileData = try get.validatedFileData()
+            guard let raw = get.fileData else {
+                throw FossilError.unexpectedResponse("activity download did not complete")
+            }
+            fileData = raw
         }
         addLog("Activity file: \(fileData.count) bytes")
 
