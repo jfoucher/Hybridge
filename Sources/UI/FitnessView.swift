@@ -62,7 +62,8 @@ struct FitnessView: View {
                     confirmingHistoryDeletion = true
                 }
                 .font(Theme.sans(14, weight: .semibold, relativeTo: .footnote))
-                .padding(.top, 10)
+                .padding(.top, 20)
+                .frame(maxWidth: .infinity, alignment: .center)
             }
             .toolbar(.hidden, for: .navigationBar)
             .sheet(isPresented: $showDayPicker) {
