@@ -262,8 +262,13 @@ struct FitnessView: View {
             }
 
             Hairline()
-            NavigationLink { WellnessView() } label: {
+            NavigationLink { WorkoutsView() } label: {
                 wellnessRow("Workouts", value: workoutsThisWeek, chevron: true, valueMuted: true)
+            }.buttonStyle(PressableRow())
+
+            Hairline()
+            NavigationLink { WellnessView() } label: {
+                wellnessRow("Wellness trends", value: "", chevron: true)
             }.buttonStyle(PressableRow())
         }
     }
