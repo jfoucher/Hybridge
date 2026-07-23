@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 @main
 struct HybridgeApp: App {
@@ -58,10 +59,16 @@ struct ContentView: View {
             }
         }
         .tint(Theme.accent)
-        // Clamp Dynamic Type: the brass system's fixed-height pills, tiles
-        // and alarm cards weren't designed for the largest accessibility
-        // sizes and would clip/overlap past this ceiling.
-        .toastOverlay()
+        .background {
+            // Attaching from a plain view (rather than .overlay) so the
+            // toast window is created once a scene exists, independent of
+            // this view's own layer — see ToastWindowController.
+            Color.clear.onAppear {
+                if let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene {
+                    ToastWindowController.attach(to: scene)
+                }
+            }
+        }
         .fullScreenCover(isPresented: Binding(
             get: { watch.awaitingAdoptionConfirm },
             set: { _ in }   // dismissal is driven by the flag itself

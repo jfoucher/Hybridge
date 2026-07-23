@@ -1164,6 +1164,43 @@ extension WatchManager {
         await syncActivityIfDue()
     }
 
+    /// Full on-demand refresh for the dashboard's pull-to-refresh: unlike
+    /// `periodicMaintenance`, this always hits the watch — no throttle, no
+    /// minimum-interval gate — since it's the direct result of an explicit
+    /// user pull. Reads device info, pairing status, configuration (battery/
+    /// step count), downloads the activity file, and — HR only — refreshes
+    /// the installed-app list and active watchface preview. Each step is
+    /// attempted independently so one failure (e.g. a quarantined activity
+    /// file) doesn't hide the others; the first error, if any, is thrown
+    /// after everything has run so the caller can still surface it.
+    func forceFullRefresh() async throws {
+        try await WatchSession.exclusive(for: connectionTokenSync()) { try await forceFullRefreshLocked() }
+    }
+
+    private func forceFullRefreshLocked() async throws {
+        guard let token = WatchSession.connectionToken, validatesConnectionToken(token) else {
+            throw FossilError.staleConnection
+        }
+        var firstError: Error?
+        do { try await fetchDeviceInfo() } catch { firstError = firstError ?? error }
+        do { _ = try await checkDevicePairing() } catch { firstError = firstError ?? error }
+        do {
+            if token.kind.hasEncryptedFiles {
+                try await readConfiguration()
+            } else {
+                try await readConfigurationQ()
+            }
+        } catch { firstError = firstError ?? error }
+        do { _ = try await syncActivity(retryQuarantined: true) } catch { firstError = firstError ?? error }
+        if token.kind.hasApps {
+            do {
+                try await refreshInstalledApps()
+                await refreshActiveWatchfaceImage()
+            } catch { firstError = firstError ?? error }
+        }
+        if let firstError { throw firstError }
+    }
+
     /// Runs `syncActivity()` only if we're connected/authenticated and the
     /// last sync (manual or automatic) is older than `autoSyncInterval`.
     /// Used by the on-connect init sequence and the periodic timer, so a

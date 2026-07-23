@@ -52,6 +52,9 @@ struct DashboardView: View {
                     .frame(maxWidth: 760)
                     .frame(maxWidth: .infinity)
                 }
+                .refreshable {
+                    await refreshFromWatch()
+                }
             }
             .toolbar(.hidden, for: .navigationBar)
         }
@@ -204,6 +207,18 @@ struct DashboardView: View {
         }
     }
     
+    /// Pull-to-refresh: forces a full read off the watch (config/battery,
+    /// activity file, installed apps + watchface preview) rather than
+    /// waiting on the periodic-maintenance throttle.
+    private func refreshFromWatch() async {
+        guard watch.connectionState == .ready else { return }
+        do {
+            try await watch.forceFullRefresh()
+        } catch {
+            await MainActor.run { ToastCenter.shared.error(error.localizedDescription) }
+        }
+    }
+
     private func pair() {
         pairing = true
         Task {

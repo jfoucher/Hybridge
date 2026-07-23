@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// App-wide transient status banners. Success confirmations auto-dismiss after
 /// a couple of seconds; errors linger a little longer. This replaces the old
@@ -41,27 +42,58 @@ final class ToastCenter: ObservableObject {
     }
 }
 
-extension View {
-    /// Presents `ToastCenter.shared` banners over this view.
-    func toastOverlay() -> some View { modifier(ToastOverlayModifier()) }
+/// Hosts toast banners in their own `UIWindow` above the whole UIKit
+/// controller stack, rather than as a SwiftUI `.overlay()` on the root view.
+/// An overlay on the root view is confined to *that view controller's*
+/// layer, so it renders *behind* anything presented modally above it —
+/// `WatchManageSheet` (tap the dashboard's watch image), Settings, Alarms,
+/// and every other screen call `ToastCenter.shared` expecting the banner to
+/// be visible no matter what sheet is currently on top. A dedicated
+/// alert-level window sits above all of them regardless of presentation
+/// depth.
+@MainActor
+enum ToastWindowController {
+    private static var window: PassthroughWindow?
+
+    /// Idempotent — call from wherever a window scene first becomes
+    /// available (app is single-window-scene, so "the first one" is fine).
+    static func attach(to scene: UIWindowScene) {
+        guard window == nil else { return }
+        let window = PassthroughWindow(windowScene: scene)
+        window.windowLevel = .alert + 1
+        window.backgroundColor = .clear
+        window.isHidden = false
+        let host = UIHostingController(rootView: ToastOverlayRoot())
+        host.view.backgroundColor = .clear
+        window.rootViewController = host
+        Self.window = window
+    }
 }
 
-private struct ToastOverlayModifier: ViewModifier {
+/// Only the toast banner itself should intercept touches; everywhere else in
+/// this window must fall through to whatever is presented underneath.
+private final class PassthroughWindow: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard let hit = super.hitTest(point, with: event), hit != rootViewController?.view else { return nil }
+        return hit
+    }
+}
+
+private struct ToastOverlayRoot: View {
     @ObservedObject private var center = ToastCenter.shared
 
-    func body(content: Content) -> some View {
-        content.overlay(alignment: .top) {
+    var body: some View {
+        VStack {
             if let toast = center.current {
                 ToastBanner(toast: toast)
                     .padding(.horizontal, 20)
                     .padding(.top, 6)
                     .transition(.move(edge: .top).combined(with: .opacity))
                     .onTapGesture { center.dismiss() }
-                    // Let touches outside the banner fall through to the UI.
-                    .frame(maxWidth: .infinity, alignment: .top)
-                    .allowsHitTesting(true)
             }
+            Spacer()
         }
+        .animation(.spring(duration: 0.3), value: center.current)
     }
 }
 

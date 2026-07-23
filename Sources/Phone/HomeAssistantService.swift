@@ -277,9 +277,12 @@ enum HomeAssistantSettingsStore {
         return url
     }
 
-    /// Insecure HTTP is deliberately limited to numeric private literals.
-    /// Accepting `.local`, dotless, or private-looking prefixes before DNS
-    /// resolution permits DNS rebinding and names such as 10.attacker.test.
+    /// Insecure HTTP is deliberately limited to numeric private literals and
+    /// `.local` mDNS names. Accepting dotless or private-looking prefixes
+    /// before DNS resolution permits DNS rebinding and names such as
+    /// 10.attacker.test; `.local` is exempted because RFC 6762 reserves that
+    /// TLD for multicast DNS on the local link — unicast resolvers must not
+    /// answer for it, so it can't be rebound to a public address.
     static func isPrivateAddressLiteral(_ host: String) -> Bool {
         let value = host.lowercased()
         let parts = value.split(separator: ".", omittingEmptySubsequences: false)
@@ -292,6 +295,10 @@ enum HomeAssistantSettingsStore {
                 || (octets[0] == 169 && octets[1] == 254)
                 || (octets[0] == 172 && (16...31).contains(octets[1]))
                 || (octets[0] == 192 && octets[1] == 168)
+        }
+
+        if parts.count >= 2, parts.last == "local", parts.dropLast().allSatisfy({ !$0.isEmpty }) {
+            return true
         }
 
         var address = in6_addr()

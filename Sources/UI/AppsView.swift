@@ -39,14 +39,12 @@ struct AppsView: View {
                         }
                         Text("v\(app.version)").font(.caption).foregroundStyle(.secondary)
                     }
-                    .swipeActions {
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                         Button(role: .destructive) {
                             pendingDelete = app
                         } label: { Label("Delete", systemImage: "trash") }
-                        Button {
-                            downloadApp(app)
-                        } label: { Label("Download", systemImage: "square.and.arrow.down") }
-                        .tint(.green)
+                    }
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
                         if !app.isWatchface {
                             Button {
                                 run("Starting \(app.name)…", success: "\(app.name) started") {
@@ -55,6 +53,10 @@ struct AppsView: View {
                             } label: { Label("Launch", systemImage: "play") }
                             .tint(.blue)
                         }
+                        Button {
+                            downloadApp(app)
+                        } label: { Label("Download", systemImage: "square.and.arrow.down") }
+                        .tint(.green)
                     }
                 }
                 Button {

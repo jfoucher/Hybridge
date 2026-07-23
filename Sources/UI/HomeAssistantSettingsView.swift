@@ -58,6 +58,7 @@ struct IntegrationsView: View {
 /// Configures the Home Assistant REST bridge and chooses the ordered entity
 /// carousel exposed to homeAssistantApp.wapp.
 struct HomeAssistantSettingsView: View {
+    @EnvironmentObject var watch: WatchManager
     @Environment(\.dismiss) private var dismiss
     var addsIntegration = false
 
@@ -77,7 +78,12 @@ struct HomeAssistantSettingsView: View {
     @State private var integrationEnabled = HomeAssistantSettingsStore.isEnabled
     @State private var allowsInsecureHTTP = false
     @State private var confirmingRemoval = false
+    @State private var installingApp = false
     @FocusState private var inputFocused: Bool
+
+    private var appInstalledOnWatch: Bool {
+        watch.installedApps.contains { $0.name == "homeAssistantApp" }
+    }
 
     private var unselected: [HomeAssistantEntity] {
         available.filter { !selectedIDs.contains($0.id) }.sorted {
@@ -97,6 +103,29 @@ struct HomeAssistantSettingsView: View {
                     }
             } footer: {
                 Text("Disabling the integration keeps its credentials and entity choices, but watch requests will not contact Home Assistant.")
+            }
+
+            Section {
+                if appInstalledOnWatch {
+                    Label("Home Assistant app installed on watch", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(Theme.success)
+                } else {
+                    Button {
+                        installAppOnWatch()
+                    } label: {
+                        HStack {
+                            Label("Install Home Assistant app on watch", systemImage: "square.and.arrow.down")
+                            Spacer()
+                            if installingApp { ProgressView() }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(installingApp)
+                }
+            } footer: {
+                Text("The watch app displays these entities and lets you control lights and climate from your wrist.")
             }
 
             Section {
@@ -352,6 +381,23 @@ struct HomeAssistantSettingsView: View {
         } catch {
             errorMessage = error.localizedDescription
             HomeAssistantLog.print("Settings action failed: \(error.localizedDescription)")
+        }
+    }
+
+    @MainActor
+    private func installAppOnWatch() {
+        guard !installingApp else { return }
+        installingApp = true
+        errorMessage = nil
+        Task {
+            do {
+                try await watch.installHomeAssistantApp()
+                installingApp = false
+                ToastCenter.shared.success(String(localized: "Home Assistant app installed"))
+            } catch {
+                installingApp = false
+                errorMessage = error.localizedDescription
+            }
         }
     }
 
