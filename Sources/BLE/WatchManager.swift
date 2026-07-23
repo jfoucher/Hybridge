@@ -603,7 +603,6 @@ final class WatchManager: NSObject, ObservableObject, @unchecked Sendable {
 
                 do {
                     let data = try request.startData()
-                    self.addLog("  write \(characteristic.uuid.uuidString.prefix(8)): \(data.hexString)")
                     peripheral.writeValue(data, for: characteristic, type: .withResponse)
                     if request.isFinished {
                         self.finishCurrentRequest()
@@ -861,7 +860,6 @@ extension WatchManager: RequestIO {
     func write(_ data: Data, to uuid: CBUUID) {
         dispatchPrecondition(condition: .onQueue(bleQueue))
         guard let peripheral, let characteristic = characteristics[uuid] else { return }
-        addLog("  write \(uuid.uuidString.prefix(8)): \(data.count <= 32 ? data.hexString : "\(data.count) bytes")")
         peripheral.writeValue(data, for: characteristic, type: .withResponse)
     }
 
@@ -1072,16 +1070,6 @@ extension WatchManager: CBPeripheralDelegate {
         }
     }
 
-    private static func describeProperties(_ properties: CBCharacteristicProperties) -> String {
-        var parts: [String] = []
-        if properties.contains(.read) { parts.append("read") }
-        if properties.contains(.write) { parts.append("write") }
-        if properties.contains(.writeWithoutResponse) { parts.append("writeNR") }
-        if properties.contains(.notify) { parts.append("notify") }
-        if properties.contains(.indicate) { parts.append("indicate") }
-        return parts.joined(separator: "|")
-    }
-
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
         guard acceptsDelegateCallback(from: peripheral) else { return }
         if let error {
@@ -1091,7 +1079,6 @@ extension WatchManager: CBPeripheralDelegate {
         guard let chars = service.characteristics else { return }
         for characteristic in chars {
             characteristics[characteristic.uuid] = characteristic
-            addLog("char \(characteristic.uuid.uuidString.prefix(8)) [\(Self.describeProperties(characteristic.properties))]")
             // 0003/0005 use indications, the others notifications — same
             // subscribe call either way.
             if FossilUUID.vendorNotifyChars.contains(characteristic.uuid),
@@ -1107,8 +1094,6 @@ extension WatchManager: CBPeripheralDelegate {
         guard acceptsDelegateCallback(from: peripheral) else { return }
         if let error {
             addLog("notify enable FAILED on \(characteristic.uuid.uuidString.prefix(8)): \(error.localizedDescription)")
-        } else {
-            addLog("notify \(characteristic.isNotifying ? "on" : "off") for \(characteristic.uuid.uuidString.prefix(8))")
         }
         pendingNotifyChars.remove(characteristic.uuid)
         startSessionIfReady()
@@ -1262,9 +1247,6 @@ extension WatchManager: CBPeripheralDelegate {
                 : Int(value.u8(at: 1))
             DispatchQueue.main.async { self.liveHeartRate = bpm }
         default:
-            if characteristic.uuid != FossilUUID.char0004 || value.count <= 4 {
-                addLog("← \(characteristic.uuid.uuidString.prefix(8)): \(value.count <= 64 ? value.hexString : "\(value.count) bytes: \(value.prefix(24).hexString)…")")
-            }
             guard let request = currentRequest else {
                 addLog("  (no request in flight — frame ignored)")
                 return
@@ -1288,12 +1270,8 @@ extension WatchManager: CBPeripheralDelegate {
             failCurrentRequest(error)
             return
         }
-        if characteristic.uuid == FossilUUID.char0004 {
-            if packetWriteType == .withResponse {
-                sendNextPackets()
-            }
-        } else {
-            addLog("  write ok on \(characteristic.uuid.uuidString.prefix(8))")
+        if characteristic.uuid == FossilUUID.char0004, packetWriteType == .withResponse {
+            sendNextPackets()
         }
     }
 

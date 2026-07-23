@@ -214,6 +214,9 @@ struct DashboardView: View {
         guard watch.connectionState == .ready else { return }
         do {
             try await watch.forceFullRefresh()
+        } catch is CancellationError {
+            // SwiftUI cancels the `.refreshable` task if the user retriggers
+            // the pull or leaves the screen mid-refresh — not a real failure.
         } catch {
             await MainActor.run { ToastCenter.shared.error(error.localizedDescription) }
         }
