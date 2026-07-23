@@ -381,6 +381,28 @@ final class FitnessStoreMultiWatchTests: XCTestCase {
                        "a reset/lower counter and yesterday's observation must not reduce or inflate today")
     }
 
+    func testPushedStepBaselineSurvivesRelaunch() async {
+        let store = FitnessStore(fileURL: fileURL)
+        let midnight = Int(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)
+        await store.merge(samples: [makeSample(midnight + 60, steps: 2500)],
+                          spo2: [], workouts: [], from: watchA)
+        XCTAssertEqual(store.stepsIncludingLive(onDay: Date()), 2500)
+
+        // Switching to watch B pushes the cross-watch total into it.
+        await store.recordPushedStepBaseline(2500, for: watchB)
+        store.recordLiveStepCount(2500, for: watchB)
+        XCTAssertEqual(store.stepsIncludingLive(onDay: Date()), 2500,
+                       "the just-pushed baseline must not be added again")
+
+        // A fresh process reads B's config (still 2500, unworn) before
+        // `pushDailyStepBaseline` runs again. Without the persisted baseline
+        // this used to double the total for an instant.
+        let reloaded = FitnessStore(fileURL: fileURL)
+        reloaded.recordLiveStepCount(2500, for: watchB)
+        XCTAssertEqual(reloaded.stepsIncludingLive(onDay: Date()), 2500,
+                       "a relaunch must remember watch B's already-reconciled baseline")
+    }
+
     func testResyncFromSameWatchStillDedups() async {
         let store = FitnessStore(fileURL: fileURL)
         let ts = now - 3600

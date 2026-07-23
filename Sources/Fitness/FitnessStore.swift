@@ -61,6 +61,11 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
     /// "the whole day's total as of the push + steps since" — so
     /// `stepsIncludingLive` must subtract this instead of the synced-samples
     /// total for that watch, or the pushed total gets added a second time.
+    /// Persisted (unlike `liveStepCountsByWatch`): without it, an app relaunch
+    /// forgets a watch's already-reconciled baseline, so the very next config
+    /// read reports its raw (stale, previously-pushed) register as if it were
+    /// brand-new live steps — doubling the total for the instant before
+    /// `pushDailyStepBaseline` re-establishes the baseline.
     private var pushedStepBaselineByWatch: [UUID: Int] = [:]
 
     /// Most recent sync across all watches (the Fitness screen label).
@@ -118,6 +123,9 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
         var workouts: [WorkoutSummary]
         var lastSync: Date?                     // pre-multi-watch archives
         var lastSyncByWatch: [String: Date]?
+        /// String-keyed for the same reason as `lastSyncByWatch` — `[UUID:
+        /// Int]` would encode as a flat array in JSON.
+        var pushedStepBaselineByWatch: [String: Int]?
     }
 
     private static let currentSchemaVersion = 1
@@ -292,6 +300,9 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
             workouts = archive.workouts
             lastSyncByWatch = archive.lastSyncByWatch ?? [:]
             legacyLastSync = archive.lastSync
+            pushedStepBaselineByWatch = Dictionary(
+                uniqueKeysWithValues: (archive.pushedStepBaselineByWatch ?? [:])
+                    .compactMap { key, value in UUID(uuidString: key).map { ($0, value) } })
             // `merge` keeps these sorted, but archives written before that
             // (or hand-edited ones) may not be, and the range lookups below
             // binary-search. Cheap on already-sorted input.
@@ -347,7 +358,9 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
     private func currentArchive() -> Archive {
         Archive(schemaVersion: Self.currentSchemaVersion,
                 samples: samples, spo2: spo2Samples, workouts: workouts,
-                lastSync: legacyLastSync, lastSyncByWatch: lastSyncByWatch)
+                lastSync: legacyLastSync, lastSyncByWatch: lastSyncByWatch,
+                pushedStepBaselineByWatch: Dictionary(
+                    uniqueKeysWithValues: pushedStepBaselineByWatch.map { ($0.key.uuidString, $0.value) }))
     }
 
     /// Encodes and writes `archive` to `url`. Pure and thread-agnostic, so the
@@ -436,6 +449,7 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
             self.workouts = []
             self.lastSyncByWatch = [:]
             self.liveStepCountsByWatch = [:]
+            self.pushedStepBaselineByWatch = [:]
             self.legacyLastSync = nil
             self.daySummaryCache = [:]
             self.loadFailed = false
@@ -806,10 +820,12 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
         liveStepCountsByWatch[watchID] = LiveStepCount(count: max(0, count), observedAt: date)
     }
 
-    /// Records the total we just wrote into `watchID`'s step register. See
-    /// `pushedStepBaselineByWatch`.
-    func recordPushedStepBaseline(_ total: Int, for watchID: UUID) {
-        pushedStepBaselineByWatch[watchID] = total
+    /// Records the total we just wrote into `watchID`'s step register, and
+    /// persists it — see `pushedStepBaselineByWatch` for why a relaunch must
+    /// not forget this.
+    func recordPushedStepBaseline(_ total: Int, for watchID: UUID) async {
+        await MainActor.run { self.pushedStepBaselineByWatch[watchID] = total }
+        _ = await persist()
     }
 
     func hasLiveStepCount(onDay day: Date, calendar: Calendar = .current) -> Bool {

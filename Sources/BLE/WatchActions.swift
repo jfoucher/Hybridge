@@ -937,8 +937,8 @@ extension WatchManager {
         let total = await MainActor.run { FitnessStore.shared.steps(onDay: Date()) }
         do {
             try await writeConfig([.currentStepCount(UInt32(total))])
+            await FitnessStore.shared.recordPushedStepBaseline(total, for: watchID)
             await MainActor.run {
-                FitnessStore.shared.recordPushedStepBaseline(total, for: watchID)
                 FitnessStore.shared.recordLiveStepCount(total, for: watchID)
                 self.watchStepCount = total
             }
