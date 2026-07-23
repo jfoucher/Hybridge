@@ -8,6 +8,8 @@ future, but that is uncertain - so it is not described as retired anywhere in
 this project or its App Store copy.) Several watches can be added; the app manages
 one at a time and its screens adapt to the active watch's capabilities.
 
+Try it here: https://testflight.apple.com/join/mcjp5hzy
+
 ## Screenshots
 
 ### iPhone
