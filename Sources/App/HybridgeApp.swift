@@ -19,6 +19,11 @@ struct HybridgeApp: App {
             ContentView()
                 .environmentObject(watch)
                 .environmentObject(registry)
+                .onOpenURL { url in
+                    // A .hbface from Files/Messages/AirDrop. RootTabView
+                    // brings the Faces tab forward; WatchfacesView consumes it.
+                    WatchfaceImportRouter.shared.pendingImportURL = url
+                }
                 .onChange(of: scenePhase) { _, phase in
                     // Capture final state before suspension, and refresh
                     // staleness math on return — the bridge's own publishers

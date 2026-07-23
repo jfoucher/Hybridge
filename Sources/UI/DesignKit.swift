@@ -59,7 +59,14 @@ struct ThemedScreen<Content: View>: View {
                 .padding(.horizontal, 22)
                 .padding(.bottom, 32 + tabBarHeight)
                 .frame(maxWidth: 760)
-                .frame(maxWidth: .infinity)
+                // Pins the column to the scroll view's own width instead of
+                // merely centering it. `frame(maxWidth: .infinity)` grows to
+                // fit an oversized child, and a content column even a fraction
+                // of a point wider than the viewport turns this vertical
+                // ScrollView into a freely two-dimensional one — the whole
+                // screen then drags sideways from anywhere. Sub-pixel rounding
+                // inside a card is enough to trip it.
+                .containerRelativeFrame(.horizontal)
             }
         }
     }
@@ -507,6 +514,13 @@ struct TileDivider: View {
 /// red Delete button; release past the far threshold to delete immediately, or
 /// tap the button. Mirrors the native list gesture on the app's cards.
 ///
+/// Rows that pass `onShare` also get a *leading* action: drag right to uncover
+/// the share glyph and it fires on release. That edge deliberately never parks
+/// open with a button to tap — sharing is meant to be one gesture, not a swipe
+/// followed by a tap — so the row always springs back to rest. Its travel is
+/// capped at `buttonWidth` with heavy resistance past that: a full-width row
+/// that slides further than its own action reads as the whole screen moving.
+///
 /// `cornerRadius` should match the wrapped surface (22 for a standalone
 /// `ThemedCard`, 0 for a row inside a shared card that already clips). Pass the
 /// card's `shadow` so the raised look survives the clip this applies.
@@ -514,6 +528,9 @@ struct SwipeToDelete<Content: View>: View {
     var cornerRadius: CGFloat = 0
     var shadow: Theme.ShadowStyle?
     let onDelete: () -> Void
+    /// Optional leading-edge action. Nil keeps the original behaviour, where a
+    /// rightward pull only rubber-bands.
+    var onShare: (() -> Void)?
     @ViewBuilder var content: () -> Content
 
     @State private var offset: CGFloat = 0
@@ -528,6 +545,9 @@ struct SwipeToDelete<Content: View>: View {
     var body: some View {
         // Distance the row must travel for a release to delete outright.
         let fullSwipe = buttonWidth * 2.6
+        // Reached just before the row stops tracking the finger, so the swipe
+        // fires exactly when the share glyph is fully uncovered.
+        let shareThreshold = buttonWidth * 0.85
         ZStack(alignment: .trailing) {
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                 .fill(Theme.danger)
@@ -544,6 +564,21 @@ struct SwipeToDelete<Content: View>: View {
                 }
                 .opacity(offset < -1 ? 1 : 0)
 
+            if onShare != nil {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(Theme.accent)
+                    .overlay(alignment: .leading) {
+                        // An affordance, not a control: the row never rests
+                        // open on this edge, so there is nothing to tap.
+                        Image(systemName: "square.and.arrow.up")
+                            .font(.system(size: 17, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: buttonWidth)
+                            .frame(maxHeight: .infinity)
+                    }
+                    .opacity(offset > 1 ? 1 : 0)
+            }
+
             content()
                 // The swipe is driven by a UIKit pan recognizer (not a SwiftUI
                 // DragGesture): a SwiftUI drag that wins the touch — which
@@ -558,8 +593,24 @@ struct SwipeToDelete<Content: View>: View {
                         onBegan: { isDragging = true },
                         onChanged: { tx in
                             let raw = resting + tx
-                            // Left reveals; a rightward pull just rubber-bands.
-                            offset = raw < 0 ? max(raw, -fullSwipe) : raw * 0.2
+                            // Left reveals the delete button; right tracks the
+                            // finger only when there's a leading action to
+                            // trigger, and otherwise just rubber-bands.
+                            if raw < 0 {
+                                offset = max(raw, -fullSwipe)
+                            } else if onShare == nil {
+                                offset = raw * 0.2
+                            } else {
+                                // Tracks the finger just far enough to uncover
+                                // the share glyph, then resists hard. Letting
+                                // it run to `fullSwipe` made a full-width row
+                                // slide half the screen, which reads as the
+                                // whole view being draggable rather than as a
+                                // row action.
+                                offset = raw <= buttonWidth
+                                    ? raw
+                                    : buttonWidth + (raw - buttonWidth) * 0.15
+                            }
                         },
                         onEnded: { tx, cancelled in
                             isDragging = false
@@ -569,13 +620,23 @@ struct SwipeToDelete<Content: View>: View {
                             } else if raw <= -buttonWidth * 0.5 {
                                 settle(-buttonWidth)
                             } else {
+                                // Always springs back on the leading edge —
+                                // the action fires from the gesture itself.
+                                // `resting == 0` so that swiping right merely
+                                // to close a revealed Delete never shares.
+                                let sharing = !cancelled && resting == 0 && raw >= shareThreshold
                                 settle(0)
+                                if sharing { onShare?() }
                             }
                         }
                     )
                     .allowsHitTesting(false)
                 }
                 .offset(x: offset)
+                // The swipes are invisible to VoiceOver, which has no way to
+                // perform them; these expose the same two actions in the rotor.
+                .accessibilityAction(named: Text("Delete"), onDelete)
+                .modifier(OptionalAccessibilityAction(name: Text("Share"), action: onShare))
                 // Disabled while the swipe pan is active, so the row's own
                 // button never gets to finish tracking that touch as a
                 // press-then-tap — that stray tap-on-release was a real bug.
@@ -590,6 +651,22 @@ struct SwipeToDelete<Content: View>: View {
         resting = value
         withAnimation(.spring(response: 0.32, dampingFraction: 0.86)) {
             offset = value
+        }
+    }
+}
+
+/// Adds an accessibility action only when there is one — rows without a
+/// leading swipe must not advertise a phantom "Share" in the rotor. The
+/// branch is constant for the lifetime of a row, so view identity is stable.
+private struct OptionalAccessibilityAction: ViewModifier {
+    let name: Text
+    let action: (() -> Void)?
+
+    func body(content: Content) -> some View {
+        if let action {
+            content.accessibilityAction(named: name, action)
+        } else {
+            content
         }
     }
 }

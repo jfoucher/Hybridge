@@ -1,12 +1,25 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
+/// A `.hbface` written to the temp directory, waiting to be handed to the
+/// share sheet. Identifiable so `.sheet(item:)` presents it as soon as the
+/// build finishes, with no second tap.
+private struct ExportedFace: Identifiable {
+    let url: URL
+    var id: String { url.path }
+}
 
 struct WatchfacesView: View {
     @EnvironmentObject var watch: WatchManager
+    @StateObject private var importRouter = WatchfaceImportRouter.shared
     @State private var designs: [WatchfaceDesign] = []
     @State private var editorDesign: WatchfaceDesign?
     @State private var busyText: String?
     @State private var installingDesignID: WatchfaceDesign.ID?
     @State private var installingBundledID: BundledFace.ID?
+    @State private var sharingDesignID: WatchfaceDesign.ID?
+    @State private var exportedFace: ExportedFace?
+    @State private var importingFace = false
     @State private var customTextPushTask: Task<Void, Never>?
     // Scoped per watch — @AppStorage can't follow a changing key, so these
     // load/save through WatchScoped and reload on watch switches.
@@ -39,8 +52,13 @@ struct WatchfacesView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .task {
-                guard designs.isEmpty else { return }
-                designs = await WatchfaceStore.loadAsync()
+                if designs.isEmpty { designs = await WatchfaceStore.loadAsync() }
+                // A cold launch from a .hbface sets the router before this
+                // screen exists, so onChange never sees the transition.
+                if let url = importRouter.pendingImportURL {
+                    importRouter.pendingImportURL = nil
+                    importFace(from: url)
+                }
             }
             .onChange(of: customUpper) { _, value in
                 UserDefaults.standard.set(value, forKey: WatchScoped.key(.customWidgetUpper))
@@ -53,6 +71,23 @@ struct WatchfacesView: View {
             .onReceive(NotificationCenter.default.publisher(for: .activeWatchChanged)) { _ in
                 customUpper = UserDefaults.standard.string(forKey: WatchScoped.key(.customWidgetUpper)) ?? ""
                 customLower = UserDefaults.standard.string(forKey: WatchScoped.key(.customWidgetLower)) ?? ""
+            }
+            .fileImporter(isPresented: $importingFace,
+                          allowedContentTypes: [.hybridgeWatchface]) { result in
+                if case let .success(url) = result { importFace(from: url) }
+            }
+            .sheet(item: $exportedFace) { face in
+                ShareSheet(url: face.url) {
+                    try? FileManager.default.removeItem(at: face.url)
+                    exportedFace = nil
+                }
+            }
+            .onChange(of: importRouter.pendingImportURL) { _, url in
+                // A .hbface opened from Files/Messages/AirDrop lands here once
+                // RootTabView has brought this tab on screen.
+                guard let url else { return }
+                importRouter.pendingImportURL = nil
+                importFace(from: url)
             }
             .fullScreenCover(item: $editorDesign) { design in
                 WatchfaceEditorView(design: design) { updated in
@@ -143,7 +178,7 @@ struct WatchfacesView: View {
                                 ToastCenter.shared.error(String(localized: "Could not save watchface designs"))
                             }
                         }
-                    }) {
+                    }, onShare: { share(design) }) {
                         Button { editorDesign = design } label: {
                             HStack(spacing: 14) {
                                 FaceThumb(design: design)
@@ -159,6 +194,11 @@ struct WatchfacesView: View {
                                 Spacer()
                                 if installingDesignID == design.id {
                                     if watch.uploadProgress == nil { ProgressView() }
+                                } else if sharingDesignID == design.id {
+                                    // Building the .wapp for the export takes
+                                    // a moment; the share sheet follows on its
+                                    // own once it lands.
+                                    ProgressView()
                                 } else {
                                     Button("Install") { install(design) }
                                         .font(Theme.sans(14, weight: .semibold, relativeTo: .subheadline))
@@ -193,8 +233,14 @@ struct WatchfacesView: View {
                     .padding(.horizontal, 16).padding(.vertical, 14)
                     .contentShape(Rectangle())
                 }.buttonStyle(PressableRow())
+                Hairline(leading: 16)
+                Button {
+                    importingFace = true
+                } label: {
+                    brassRow("square.and.arrow.down", "Import a shared face")
+                }.buttonStyle(PressableRow())
             }
-            Footer("Designs stay on your phone. Install pushes the 2-bit e-ink render over Bluetooth — larger photos take a few seconds.")
+            Footer("Designs stay on your phone. Install pushes the 2-bit e-ink render over Bluetooth — larger photos take a few seconds. Swipe a design right to share it — the file carries its background image.")
         }
     }
 
@@ -322,8 +368,14 @@ struct WatchfacesView: View {
     private func brassRow(_ symbol: String, _ title: LocalizedStringResource) -> some View {
         HStack(spacing: 10) {
             Image(systemName: symbol).font(.system(size: 16, weight: .semibold))
+            // Must be allowed to wrap: an HStack hands a Text its *ideal*
+            // single-line width, so a title one point too wide for the column
+            // (any longer translation does it) pushed the whole screen's
+            // scroll content past the viewport — which turns the vertical
+            // ScrollView into a freely pannable 2D one.
             Text(title).font(Theme.sans(15, weight: .semibold, relativeTo: .body))
-            Spacer()
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
         .foregroundStyle(Theme.accent)
         .padding(.horizontal, 16).padding(.vertical, 14)
@@ -349,6 +401,47 @@ struct WatchfacesView: View {
                 }
             } catch {
                 await MainActor.run { busyText = nil; ToastCenter.shared.error(error.localizedDescription) }
+            }
+        }
+    }
+
+    /// One gesture, one operation: the right-swipe builds the `.hbface` and
+    /// the share sheet appears by itself when it's ready.
+    private func share(_ design: WatchfaceDesign) {
+        guard sharingDesignID == nil else { return }
+        sharingDesignID = design.id
+        Task {
+            do {
+                let url = try await WatchfaceSharing.exportTemporaryFile(for: design)
+                await MainActor.run {
+                    sharingDesignID = nil
+                    exportedFace = ExportedFace(url: url)
+                }
+            } catch {
+                await MainActor.run {
+                    sharingDesignID = nil
+                    ToastCenter.shared.error(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    private func importFace(from url: URL) {
+        let imported: WatchfaceDesign
+        do {
+            imported = try WatchfaceSharing.importDesign(from: url, existing: designs)
+        } catch {
+            ToastCenter.shared.error(error.localizedDescription)
+            return
+        }
+        designs.append(imported)
+        let snapshot = designs
+        Task {
+            if await WatchfaceStore.saveAsync(snapshot) {
+                ToastCenter.shared.success(
+                    String(localized: "\(imported.name) added to your designs"))
+            } else {
+                ToastCenter.shared.error(String(localized: "Could not save watchface designs"))
             }
         }
     }

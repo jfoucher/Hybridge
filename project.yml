@@ -116,6 +116,31 @@ targets:
           - IBMPlexMono-Regular.ttf
           - IBMPlexMono-Medium.ttf
           - IBMPlexMono-SemiBold.ttf
+        # .hbface — a shared watchface (SharedWatchfacePackage): the compiled
+        # .wapp plus the editable design, as one JSON document. Declaring the
+        # type here is what lets one land from AirDrop/Messages/Files and open
+        # the app (HybridgeApp.onOpenURL → WatchfaceImportRouter). Keep the
+        # identifier in sync with UTType.hybridgeWatchface.
+        # Deliberately no UIFileSharingEnabled: that would expose the whole
+        # Documents folder (designs, fitness archive, quarantined activity
+        # files) in the Files app, which this feature does not need.
+        UTExportedTypeDeclarations:
+          - UTTypeIdentifier: eu.sixpixels.hybridge.watchface
+            UTTypeDescription: Hybridge Watchface
+            UTTypeConformsTo:
+              - public.json
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - hbface
+              public.mime-type:
+                - application/vnd.sixpixels.hybridge-watchface+json
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Hybridge Watchface
+            CFBundleTypeRole: Editor
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - eu.sixpixels.hybridge.watchface
+        LSSupportsOpeningDocumentsInPlace: true
     entitlements:
       path: Sources/Hybridge.entitlements
       properties:

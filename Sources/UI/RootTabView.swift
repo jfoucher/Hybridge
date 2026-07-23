@@ -55,6 +55,7 @@ enum RootLayout {
 /// active watch has an e-ink display.
 struct RootTabView: View {
     let hasFaces: Bool
+    @StateObject private var importRouter = WatchfaceImportRouter.shared
     @State private var selection: RootTab = RootTabView.initialTab
     @State private var tabBarHeight: CGFloat = 0
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
@@ -95,6 +96,23 @@ struct RootTabView: View {
         }
         .onAppear(perform: normalizeSelection)
         .onChange(of: hasFaces) { _, _ in normalizeSelection() }
+        .onAppear(perform: routePendingWatchfaceImport)
+        .onChange(of: importRouter.pendingImportURL) { _, _ in routePendingWatchfaceImport() }
+    }
+
+    /// Brings the Faces tab forward for a `.hbface` opened from outside the
+    /// app; `WatchfacesView` does the actual import and clears the router.
+    /// A watch with no e-ink display has no Faces tab at all, so the file is
+    /// dropped here rather than left pending forever.
+    private func routePendingWatchfaceImport() {
+        guard importRouter.pendingImportURL != nil else { return }
+        guard hasFaces else {
+            importRouter.pendingImportURL = nil
+            ToastCenter.shared.error(
+                String(localized: "This watch has no display for watchfaces."))
+            return
+        }
+        selection = .faces
     }
 
     @ViewBuilder private var selectedScreen: some View {
