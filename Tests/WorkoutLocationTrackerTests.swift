@@ -1,5 +1,6 @@
 import XCTest
 import CoreLocation
+import UIKit
 @testable import Hybridge
 
 private final class FakeLocationProvider: LocationProviding {
@@ -84,5 +85,83 @@ final class WorkoutLocationTrackerTests: XCTestCase {
         XCTAssertNotNil(delta)
         XCTAssertGreaterThan(delta?.distanceCm ?? 0, 0)
         XCTAssertLessThan(delta?.distanceCm ?? .max, 2_000)
+    }
+
+    /// A watch-started workout that couldn't get GPS (permission not yet
+    /// resolved, or the app was backgrounded) should retry automatically the
+    /// next time the app comes to the foreground, rather than requiring the
+    /// user to somehow know to retry manually.
+    @MainActor
+    func testAbortedStartRetriesOnForegroundWhenTokenStillValid() async {
+        let provider = FakeLocationProvider()
+        provider.authorizationStatus = .denied
+        let tracker = WorkoutLocationTracker(locationProvider: provider, validatesToken: { _ in true })
+        let watch = token(UUID())
+
+        tracker.start(for: watch)
+        await drainMainQueue()
+        XCTAssertEqual(provider.startCount, 0)
+        XCTAssertFalse(tracker.isTracking(for: watch))
+        XCTAssertTrue(tracker.hasPendingRetry)
+
+        // Permission gets fixed (e.g. via Settings) before the user reopens
+        // the app.
+        provider.authorizationStatus = .authorizedAlways
+        NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        await drainMainQueue()
+
+        XCTAssertEqual(provider.startCount, 1)
+        XCTAssertTrue(tracker.isTracking(for: watch))
+        XCTAssertFalse(tracker.hasPendingRetry)
+    }
+
+    /// If the watch reconnected under a new BLE session while the app was
+    /// backgrounded, the pending token no longer identifies a live
+    /// connection — retrying with it would desync from the token the watch
+    /// now sends with pause/resume/stop/poll requests, so it must be dropped
+    /// instead of used to start a session.
+    @MainActor
+    func testAbortedStartDropsPendingRetryWhenTokenNoLongerValid() async {
+        let provider = FakeLocationProvider()
+        provider.authorizationStatus = .denied
+        let tracker = WorkoutLocationTracker(locationProvider: provider, validatesToken: { _ in false })
+        let watch = token(UUID())
+
+        tracker.start(for: watch)
+        await drainMainQueue()
+        XCTAssertTrue(tracker.hasPendingRetry)
+
+        provider.authorizationStatus = .authorizedAlways
+        NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        await drainMainQueue()
+
+        XCTAssertEqual(provider.startCount, 0)
+        XCTAssertFalse(tracker.isTracking(for: watch))
+        XCTAssertFalse(tracker.hasPendingRetry)
+    }
+
+    /// If the watch reports the workout ended before the app ever made it to
+    /// the foreground, the pending retry must be cancelled — otherwise the
+    /// next foreground event would start tracking a workout that's already
+    /// over.
+    @MainActor
+    func testStopBeforeForegroundCancelsPendingRetry() async {
+        let provider = FakeLocationProvider()
+        provider.authorizationStatus = .denied
+        let tracker = WorkoutLocationTracker(locationProvider: provider, validatesToken: { _ in true })
+        let watch = token(UUID())
+
+        tracker.start(for: watch)
+        await drainMainQueue()
+        XCTAssertTrue(tracker.hasPendingRetry)
+
+        tracker.stop(for: watch)
+        await drainMainQueue()
+        XCTAssertFalse(tracker.hasPendingRetry)
+
+        provider.authorizationStatus = .authorizedAlways
+        NotificationCenter.default.post(name: UIApplication.willEnterForegroundNotification, object: nil)
+        await drainMainQueue()
+        XCTAssertEqual(provider.startCount, 0)
     }
 }

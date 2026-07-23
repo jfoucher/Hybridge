@@ -29,6 +29,10 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
     static let shared = WorkoutLocationTracker()
 
     private let manager: any LocationProviding
+    /// Whether `token` still identifies the current BLE connection — injected
+    /// like `manager` so `retryPendingStart()` is testable without a real
+    /// watch attached.
+    private let validatesToken: (WatchConnectionToken) -> Bool
 
     private let lock = NSLock()
     // All of the following are guarded by `lock`.
@@ -39,6 +43,17 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
     private enum SessionState { case idle, requestingAuthorization, running, paused, stopping }
     private var sessionState: SessionState = .idle
     private var sessionToken: WatchConnectionToken?
+    /// Set when `start()` is aborted because the app is backgrounded (or
+    /// permission isn't resolved yet) — cleared once a retry succeeds, the
+    /// watch reports the workout ended, or the connection this token belongs
+    /// to drops. `willEnterForegroundNotification` uses it to pick the
+    /// watch-started workout back up without the user having to do anything
+    /// beyond opening the app (or tapping the notification, which does the
+    /// same thing).
+    private var pendingRetryToken: WatchConnectionToken?
+
+    /// Test-observable mirror of `pendingRetryToken != nil`.
+    var hasPendingRetry: Bool { withLock { pendingRetryToken != nil } }
 
     /// Main-thread mirrors for the UI (the Workout GPS demo screen). The
     /// authoritative state stays lock-guarded above; these are published from
@@ -50,8 +65,10 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
         self.init(locationProvider: CLLocationManager())
     }
 
-    init(locationProvider: any LocationProviding) {
+    init(locationProvider: any LocationProviding,
+        validatesToken: @escaping (WatchConnectionToken) -> Bool = { WatchManager.shared.validatesConnectionToken($0) }) {
         manager = locationProvider
+        self.validatesToken = validatesToken
         super.init()
         if let manager = locationProvider as? CLLocationManager {
             manager.delegate = self
@@ -63,6 +80,14 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
         // Show the blue background-location indicator whenever GPS runs with
         // the app off screen. Transparency for the user, and the signal App
         // Review looks for when the `location` background mode is declared.
+
+        // A watch-started workout that arrived while backgrounded couldn't
+        // start GPS (see `start()`); retry once the app is actually on
+        // screen, same trigger `WatchManager` uses to catch up its own state.
+        NotificationCenter.default.addObserver(forName: UIApplication.willEnterForegroundNotification,
+                                               object: nil, queue: .main) { [weak self] _ in
+            self?.retryPendingStart()
+        }
     }
 
     private func withLock<T>(_ body: () -> T) -> T {
@@ -78,7 +103,11 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
         }
     }
 
-    func start(for token: WatchConnectionToken? = nil) {
+    /// - Parameter isRetry: true when called from `retryPendingStart()`
+    ///   rather than fresh off the watch's `workoutApp` event. Suppresses the
+    ///   "open Hybridge" notification on a repeat failure — the user already
+    ///   saw it once, and it's now been superseded by this retry attempt.
+    func start(for token: WatchConnectionToken? = nil, isRetry: Bool = false) {
         let accepted = withLock { () -> Bool in
             guard sessionState == .idle else { return false }
             lastLocation = nil
@@ -101,18 +130,19 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
             // reached from the watch's `workoutApp` event, so the common case
             // is exactly the one that cannot work: phone in a pocket, app
             // suspended. Rather than fail silently (distance stays 0, no error,
-            // no log — the previous behaviour), tell the user.
+            // no log — the previous behaviour), tell the user, and remember to
+            // retry once the app is actually foregrounded.
             switch status {
             case .denied, .restricted:
-                self.abortStart(status: status, backgrounded: backgrounded)
+                self.abortStart(status: status, backgrounded: backgrounded, token: token, isRetry: isRetry)
                 return
             case .notDetermined where backgrounded:
-                self.abortStart(status: status, backgrounded: backgrounded)
+                self.abortStart(status: status, backgrounded: backgrounded, token: token, isRetry: isRetry)
                 return
             case .notDetermined:
                 self.manager.requestWhenInUseAuthorization()
             case .authorizedWhenInUse where backgrounded:
-                self.abortStart(status: status, backgrounded: backgrounded)
+                self.abortStart(status: status, backgrounded: backgrounded, token: token, isRetry: isRetry)
                 return
             default:
                 break   // authorizedAlways, or when-in-use with the app on screen
@@ -122,11 +152,31 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
             // background mode, which the app does declare).
             self.manager.allowsBackgroundLocationUpdates = true
             self.manager.startUpdatingLocation()
-            self.withLock { self.sessionState = .running }
+            self.withLock {
+                self.sessionState = .running
+                if Self.sameSession(self.pendingRetryToken, token) { self.pendingRetryToken = nil }
+            }
             self.isRunning = true
             self.liveDistanceMeters = 0
-            WatchManager.shared.addLog("Workout GPS started")
+            WatchManager.shared.addLog("Workout GPS started" + (isRetry ? " (retry on foreground)" : ""))
         }
+    }
+
+    /// Called on `willEnterForegroundNotification`. Picks a watch-started
+    /// workout back up if `start()` had to bail while backgrounded and the
+    /// watch hasn't since reported it ended (`stop()` clears the pending
+    /// token) or reconnected under a new BLE session (a stale token would
+    /// desync from the token the watch now sends with `pause`/`resume`/
+    /// `stop`/poll requests, so those would silently stop matching).
+    private func retryPendingStart() {
+        let token = withLock { pendingRetryToken }
+        guard let token else { return }
+        guard validatesToken(token) else {
+            withLock { pendingRetryToken = nil }
+            WatchManager.shared.addLog("Workout GPS: dropping stale pending retry (watch reconnected)")
+            return
+        }
+        start(for: token, isRetry: true)
     }
 
     /// Starts a GPS session directly from the app (the Workout GPS demo
@@ -146,13 +196,18 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
     /// Whether GPS is authorized enough to record (for the demo screen's UI).
     var authorizationStatus: CLAuthorizationStatus { manager.authorizationStatus }
 
-    /// Rolls back the optimistic `tracking = true` and tells the user why.
-    private func abortStart(status: CLAuthorizationStatus, backgrounded: Bool) {
+    /// Rolls back the optimistic `tracking = true`, remembers to retry once
+    /// foregrounded, and — unless this abort was itself a retry — tells the
+    /// user why.
+    private func abortStart(status: CLAuthorizationStatus, backgrounded: Bool,
+                            token: WatchConnectionToken?, isRetry: Bool) {
         withLock {
             sessionState = .idle
             sessionToken = nil
+            pendingRetryToken = token
         }
         isRunning = false   // on main (abortStart is only called from start()'s main dispatch)
+        guard !isRetry else { return }
         reportCannotTrack(status: status, backgrounded: backgrounded)
     }
 
@@ -196,6 +251,11 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
 
     func stop(for token: WatchConnectionToken? = nil) {
         let total: Double? = withLock {
+            // The workout may have ended on the watch before GPS ever got a
+            // chance to start (still backgrounded, waiting on a foreground
+            // retry) — drop the pending retry so we don't start tracking a
+            // workout that's already over.
+            if Self.sameSession(pendingRetryToken, token) { pendingRetryToken = nil }
             guard sessionState != .idle, sessionState != .stopping,
                   Self.sameSession(sessionToken, token) else { return nil }
             sessionState = .stopping
