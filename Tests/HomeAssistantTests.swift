@@ -50,8 +50,11 @@ final class HomeAssistantTests: XCTestCase {
         XCTAssertThrowsError(try HomeAssistantSettingsStore.normalizedBaseURL("http://homeassistant.local:8123")) {
             XCTAssertEqual($0 as? HomeAssistantError, .insecureHTTPNotAllowed)
         }
-        XCTAssertThrowsError(try HomeAssistantSettingsStore.normalizedBaseURL(
-            "http://homeassistant.local:8123", allowsInsecureHTTP: true))
+        XCTAssertEqual(
+            try HomeAssistantSettingsStore.normalizedBaseURL(
+                "http://homeassistant.local:8123", allowsInsecureHTTP: true).absoluteString,
+            "http://homeassistant.local:8123"
+        )
         XCTAssertEqual(
             try HomeAssistantSettingsStore.normalizedBaseURL(
                 "http://192.168.1.20:8123", allowsInsecureHTTP: true).absoluteString,
