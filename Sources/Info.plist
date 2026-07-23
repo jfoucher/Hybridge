@@ -38,7 +38,7 @@
 	<string>Hybridge connects to your supported Fossil hybrid watch over Bluetooth to set the time, alarms and compatible settings.
 </string>
 	<key>NSCalendarsFullAccessUsageDescription</key>
-	<string>Sends your upcoming events to your watch.
+	<string>Sends your upcoming events to your watch, and can check whether you're in a meeting to enable quiet hours automatically. Calendar data for the meeting check never leaves your phone.
 </string>
 	<key>NSHealthShareUsageDescription</key>
 	<string>Hybridge does not read any Health data.

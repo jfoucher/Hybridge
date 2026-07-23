@@ -438,7 +438,8 @@ struct QuietHoursSettingsView: View {
     @State private var enabled = QuietHoursManager.shared.schedule.enabled
     @State private var start = QuietHoursSettingsView.date(fromMinutes: QuietHoursManager.shared.schedule.startMinutes)
     @State private var end = QuietHoursSettingsView.date(fromMinutes: QuietHoursManager.shared.schedule.endMinutes)
-    @State private var effective = QuietHoursManager.shared.effectiveMode
+    @State private var calendarQuietEnabled = QuietHoursManager.shared.calendarQuietEnabled
+    @State private var status = QuietHoursManager.shared.status
 
     var body: some View {
         Form {
@@ -452,7 +453,7 @@ struct QuietHoursSettingsView: View {
                         .onChange(of: end) { _, v in update { $0.endMinutes = Self.minutes(from: v) } }
                 }
                 Toggle("Quiet now", isOn: Binding(
-                    get: { effective == .night },
+                    get: { status.mode == .night },
                     set: { v in
                         Task {
                             // Force the mode explicitly (not nil) so the toggle
@@ -461,20 +462,45 @@ struct QuietHoursSettingsView: View {
                             // would just re-derive from the schedule, which
                             // hasn't changed, making the toggle a no-op.
                             await QuietHoursManager.shared.setOverride(v ? .night : .day)
-                            await MainActor.run { effective = QuietHoursManager.shared.effectiveMode; onChange() }
+                            await refreshStatus()
                         }
                     }
                 ))
-                LabeledContent("Currently", value: effective == .night
-                               ? String(localized: "Quiet") : String(localized: "Normal"))
+                LabeledContent("Currently", value: currentlyText)
                     .foregroundStyle(.secondary)
             } footer: {
                 Text("Blocks every notification on the watch during the window — there's no per-app level, just on or off. While backgrounded, the swap lands within minutes to about an hour of the boundary; instantly when you open the app or the watch reconnects.")
+            }
+            Section {
+                Toggle("Quiet during meetings", isOn: $calendarQuietEnabled)
+                    .onChange(of: calendarQuietEnabled) { _, v in
+                        Task {
+                            let ok = await QuietHoursManager.shared.setCalendarQuietEnabled(v)
+                            await MainActor.run {
+                                if !ok {
+                                    calendarQuietEnabled = false
+                                    ToastCenter.shared.error(String(localized: "Calendar access denied"))
+                                }
+                            }
+                            await refreshStatus()
+                        }
+                    }
+            } footer: {
+                Text("Also goes quiet during calendar events marked Busy that you organized or accepted — skips all-day events. Uses the same calendar access as sending events to your watch.")
             }
         }
         .navigationTitle("Quiet hours")
         .themedList()
         .tint(Theme.accent)
+    }
+
+    private var currentlyText: String {
+        switch status.source {
+        case .off: return String(localized: "Normal")
+        case .override: return status.mode == .night ? String(localized: "Quiet") : String(localized: "Normal")
+        case .schedule, .both: return String(localized: "Quiet (scheduled)")
+        case .calendarBusy: return String(localized: "Quiet (meeting)")
+        }
     }
 
     private func update(_ change: (inout QuietSchedule) -> Void) {
@@ -483,8 +509,14 @@ struct QuietHoursSettingsView: View {
         QuietHoursManager.shared.schedule = schedule
         Task {
             await QuietHoursManager.shared.evaluate()
-            await MainActor.run { effective = QuietHoursManager.shared.effectiveMode; onChange() }
+            await refreshStatus()
         }
+    }
+
+    @MainActor
+    private func refreshStatus() async {
+        status = QuietHoursManager.shared.status
+        onChange()
     }
 
     static func date(fromMinutes minutes: Int) -> Date {

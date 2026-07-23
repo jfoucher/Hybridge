@@ -243,6 +243,7 @@ enum WatchScopedKey: String, CaseIterable {
     case quietSchedule
     case quietModeApplied
     case quietOverride
+    case calendarQuietEnabled
     // These profile keys used to be per-watch. They remain reserved here so
     // v1 namespaced copies can be migrated and purged; current writes use the
     // bare global key because Settings applies one profile to every HR watch.

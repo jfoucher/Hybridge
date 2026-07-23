@@ -1,284 +1,284 @@
 {
-  "sourceLanguage" : "en",
-  "strings" : {
-    "CFBundleDisplayName" : {
-      "comment" : "The app name shown below its icon.",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge"
+  "sourceLanguage": "en",
+  "strings": {
+    "CFBundleDisplayName": {
+      "comment": "The app name shown below its icon.",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge"
           }
         },
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Hybridge"
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Hybridge"
           }
         },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge"
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge"
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge"
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge"
           }
         }
       },
-      "shouldTranslate" : false
+      "shouldTranslate": false
     },
-    "CFBundleName" : {
-      "comment" : "Bundle name",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge"
+    "CFBundleName": {
+      "comment": "Bundle name",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge"
           }
         },
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Hybridge"
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Hybridge"
           }
         },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge"
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge"
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge"
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge"
           }
         }
       }
     },
-    "NSAppleMusicUsageDescription" : {
-      "comment" : "Privacy permission explaining why the app needs access to Apple Music.",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Zeigt den aktuellen Titel auf Ihrer Uhr an und ermöglicht die Steuerung der Wiedergabe über die Tasten."
+    "NSAppleMusicUsageDescription": {
+      "comment": "Privacy permission explaining why the app needs access to Apple Music.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zeigt den aktuellen Titel auf Ihrer Uhr an und ermöglicht die Steuerung der Wiedergabe über die Tasten."
           }
         },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Shows the current track on your watch and lets its buttons control playback."
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Shows the current track on your watch and lets its buttons control playback."
           }
         },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Muestra la pista actual en su reloj y permite que sus botones controlen la reproducción."
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Muestra la pista actual en su reloj y permite que sus botones controlen la reproducción."
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Affiche la piste actuelle sur votre montre et permet à ses boutons de contrôler la lecture."
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Affiche la piste actuelle sur votre montre et permet à ses boutons de contrôler la lecture."
           }
         }
       }
     },
-    "NSBluetoothAlwaysUsageDescription" : {
-      "comment" : "Privacy permission explaining why the app needs Bluetooth.",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge verbindet sich über Bluetooth mit deiner Hybriduhr, um Uhrzeit, Alarme, Einstellungen und Zifferblätter festzulegen."
+    "NSBluetoothAlwaysUsageDescription": {
+      "comment": "Privacy permission explaining why the app needs Bluetooth.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge verbindet sich über Bluetooth mit deiner Hybriduhr, um Uhrzeit, Alarme, Einstellungen und Zifferblätter festzulegen."
           }
         },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge connects to your hybrid watch over Bluetooth to set the time, alarms, settings, and watchfaces."
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge connects to your hybrid watch over Bluetooth to set the time, alarms, settings, and watchfaces."
           }
         },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge se conecta a tu reloj híbrido por Bluetooth para configurar la hora, las alarmas, los ajustes y las esferas."
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge se conecta a tu reloj híbrido por Bluetooth para configurar la hora, las alarmas, los ajustes y las esferas."
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge se connecte à votre montre hybride par Bluetooth pour régler l’heure, les alarmes, les paramètres et les cadrans."
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge se connecte à votre montre hybride par Bluetooth pour régler l’heure, les alarmes, les paramètres et les cadrans."
           }
         }
       }
     },
-    "NSCalendarsFullAccessUsageDescription" : {
-      "comment" : "Privacy permission explaining why the app needs calendar access.",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sendet Ihre bevorstehenden Ereignisse an Ihre Uhr."
+    "NSCalendarsFullAccessUsageDescription": {
+      "comment": "Privacy permission explaining why the app needs calendar access.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sendet Ihre bevorstehenden Ereignisse an Ihre Uhr und kann prüfen, ob Sie sich in einem Termin befinden, um die Ruhezeiten automatisch zu aktivieren. Die Kalenderdaten für die Terminprüfung verlassen Ihr Telefon nicht."
           }
         },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Sends your upcoming events to your watch."
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sends your upcoming events to your watch, and can check whether you're in a meeting to enable quiet hours automatically. Calendar data for the meeting check never leaves your phone."
           }
         },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Envía tus próximos eventos a tu reloj."
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envía tus próximos eventos a tu reloj y puede comprobar si estás en una reunión para activar automáticamente el modo silencioso. Los datos del calendario para esta comprobación nunca salen de tu teléfono."
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Envoie vos événements à venir sur votre montre."
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Envoie vos événements à venir sur votre montre, et peut vérifier si vous êtes en réunion pour activer automatiquement le mode silencieux. Les données de calendrier pour cette vérification ne quittent jamais votre téléphone."
           }
         }
       }
     },
-    "NSHealthShareUsageDescription" : {
-      "comment" : "Privacy permission shown for Health access. The app does not read Health data.",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge liest keine Gesundheitsdaten."
+    "NSHealthShareUsageDescription": {
+      "comment": "Privacy permission shown for Health access. The app does not read Health data.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge liest keine Gesundheitsdaten."
           }
         },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge does not read any Health data."
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge does not read any Health data."
           }
         },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge no lee ningún dato de Salud."
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge no lee ningún dato de Salud."
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge ne lit aucune donnée de santé."
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge ne lit aucune donnée de santé."
           }
         }
       }
     },
-    "NSHealthUpdateUsageDescription" : {
-      "comment" : "Privacy permission explaining which watch data the app writes to Apple Health.",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge schreibt die von Ihrer Uhr aufgezeichneten Schritte, Herzfrequenz, Kalorien und SpO₂ in Apple Health."
+    "NSHealthUpdateUsageDescription": {
+      "comment": "Privacy permission explaining which watch data the app writes to Apple Health.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge schreibt die von Ihrer Uhr aufgezeichneten Schritte, Herzfrequenz, Kalorien und SpO₂ in Apple Health."
           }
         },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge writes the steps, heart rate, calories, and SpO₂ recorded by your watch into Apple Health."
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge writes the steps, heart rate, calories, and SpO₂ recorded by your watch into Apple Health."
           }
         },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge escribe los pasos, frecuencia cardíaca, calorías y SpO₂ registrados por su reloj en Apple Health."
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge escribe los pasos, frecuencia cardíaca, calorías y SpO₂ registrados por su reloj en Apple Health."
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hybridge écrit les pas, la fréquence cardiaque, les calories et SpO₂ enregistrés par votre montre dans Apple Health."
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hybridge écrit les pas, la fréquence cardiaque, les calories et SpO₂ enregistrés par votre montre dans Apple Health."
           }
         }
       }
     },
-    "NSHumanReadableCopyright" : {
-      "comment" : "Copyright (human-readable)",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "© 2026 Jonathan Foucher"
+    "NSHumanReadableCopyright": {
+      "comment": "Copyright (human-readable)",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "© 2026 Jonathan Foucher"
           }
         }
       },
-      "shouldTranslate" : false
+      "shouldTranslate": false
     },
-    "NSLocalNetworkUsageDescription" : {
-      "comment" : "Privacy - Local Network Usage Description",
-      "extractionState" : "extracted_with_value",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Stellt eine Verbindung zu Ihrem Home-Assistant-Server im lokalen Netzwerk her, wenn die Home-Assistant-App auf der Uhr Entitäten anfordert oder einen Steuerbefehl sendet.\n"
+    "NSLocalNetworkUsageDescription": {
+      "comment": "Privacy - Local Network Usage Description",
+      "extractionState": "extracted_with_value",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stellt eine Verbindung zu Ihrem Home-Assistant-Server im lokalen Netzwerk her, wenn die Home-Assistant-App auf der Uhr Entitäten anfordert oder einen Steuerbefehl sendet.\n"
           }
         },
-        "en" : {
-          "stringUnit" : {
-            "state" : "new",
-            "value" : "Connects to your Home Assistant server on your local network when the Home Assistant watch app requests entities or sends a control.\n"
+        "en": {
+          "stringUnit": {
+            "state": "new",
+            "value": "Connects to your Home Assistant server on your local network when the Home Assistant watch app requests entities or sends a control.\n"
           }
         },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se conecta a tu servidor de Home Assistant en la red local cuando la app de Home Assistant del reloj solicita entidades o envía una orden.\n"
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se conecta a tu servidor de Home Assistant en la red local cuando la app de Home Assistant del reloj solicita entidades o envía una orden.\n"
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Se connecte à votre serveur Home Assistant sur le réseau local lorsque l’app Home Assistant de la montre demande des entités ou envoie une commande.\n"
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se connecte à votre serveur Home Assistant sur le réseau local lorsque l’app Home Assistant de la montre demande des entités ou envoie une commande.\n"
           }
         }
       }
     },
-    "NSLocationWhenInUseUsageDescription" : {
-      "comment" : "Privacy permission explaining why the app needs foreground and continuing workout location access.",
-      "localizations" : {
-        "de" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Zeichnet die GPS-Distanz für Trainingseinheiten auf, die Sie auf Ihrer Uhr oder in der App starten. Ein aktives Training kann unter Verwendung Ihres Standorts im Hintergrund fortgesetzt werden, wobei die blaue Statusanzeige sichtbar ist, und stoppt, wenn das Training endet. Der Standort wird auch verwendet, um das lokale Wetter für Ihre Uhr abzurufen."
+    "NSLocationWhenInUseUsageDescription": {
+      "comment": "Privacy permission explaining why the app needs foreground and continuing workout location access.",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Zeichnet die GPS-Distanz für Trainingseinheiten auf, die Sie auf Ihrer Uhr oder in der App starten. Ein aktives Training kann unter Verwendung Ihres Standorts im Hintergrund fortgesetzt werden, wobei die blaue Statusanzeige sichtbar ist, und stoppt, wenn das Training endet. Der Standort wird auch verwendet, um das lokale Wetter für Ihre Uhr abzurufen."
           }
         },
-        "en" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Records GPS distance for workouts you start on your watch or in the app. An active workout can continue using your location in the background, with the blue status indicator visible, and stops when the workout ends. Location is also used to fetch local weather for your watch."
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Records GPS distance for workouts you start on your watch or in the app. An active workout can continue using your location in the background, with the blue status indicator visible, and stops when the workout ends. Location is also used to fetch local weather for your watch."
           }
         },
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Registra la distancia GPS de los entrenamientos que inicias en tu reloj o en la aplicación. Un entrenamiento activo puede continuar usando su ubicación en segundo plano, con el indicador de estado azul visible, y se detiene cuando finaliza el entrenamiento. La ubicación también se utiliza para obtener el clima local para su reloj."
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Registra la distancia GPS de los entrenamientos que inicias en tu reloj o en la aplicación. Un entrenamiento activo puede continuar usando su ubicación en segundo plano, con el indicador de estado azul visible, y se detiene cuando finaliza el entrenamiento. La ubicación también se utiliza para obtener el clima local para su reloj."
           }
         },
-        "fr" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Enregistre la distance GPS pour les entraînements que vous démarrez sur votre montre ou dans l'application. Un entraînement actif peut continuer à utiliser votre position en arrière-plan, avec l'indicateur d'état bleu visible, et s'arrêter à la fin de l'entraînement. La localisation est également utilisée pour récupérer la météo locale pour votre montre."
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enregistre la distance GPS pour les entraînements que vous démarrez sur votre montre ou dans l'application. Un entraînement actif peut continuer à utiliser votre position en arrière-plan, avec l'indicateur d'état bleu visible, et s'arrêter à la fin de l'entraînement. La localisation est également utilisée pour récupérer la météo locale pour votre montre."
           }
         }
       }
     }
   },
-  "version" : "1.0"
+  "version": "1.0"
 }

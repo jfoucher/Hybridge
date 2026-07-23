@@ -75,7 +75,9 @@ targets:
           background with the blue status indicator and stops with the workout.
           Also fetches local weather to show on your watch.
         NSCalendarsFullAccessUsageDescription: >
-          Sends your upcoming events to your watch.
+          Sends your upcoming events to your watch, and can check whether
+          you're in a meeting to enable quiet hours automatically. Calendar
+          data for the meeting check never leaves your phone.
         NSLocalNetworkUsageDescription: >
           Connects to your Home Assistant server on your local network when
           the Home Assistant watch app requests entities or sends a control.

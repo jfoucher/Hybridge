@@ -1,4 +1,5 @@
 import Foundation
+import EventKit
 
 /// A daily block-everything window (e.g. bedtime). Only one window is
 /// supported, always blocking all notifications while active — no per-level
@@ -62,16 +63,34 @@ private struct QuietOverride: Codable {
     var expiry: Date?
 }
 
+/// Where a quiet-mode decision came from — surfaced in the UI so an
+/// otherwise-invisible calendar signal is explainable ("Quiet (meeting)" vs.
+/// "Quiet (scheduled)").
+enum QuietSource {
+    case off, override, schedule, calendarBusy, both
+}
+
+struct QuietStatus {
+    let mode: QuietMode
+    let source: QuietSource
+}
+
 /// Keeps the watch's notification filter in sync with the user's quiet-hours
-/// schedule. The schedule and manual override are global preferences; the
-/// last applied mode remains per-watch so every watch receives the filter.
+/// schedule. The schedule, manual override, and calendar-busy toggle are
+/// global preferences; the last applied mode remains per-watch so every
+/// watch receives the filter.
 final class QuietHoursManager: @unchecked Sendable {
     static let shared = QuietHoursManager()
 
     private let defaults: UserDefaults
+    private let busyProvider: BusyIntervalProviding
+    private let calendarObserverLock = NSLock()
+    private var calendarObserverToken: NSObjectProtocol?
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, busyProvider: BusyIntervalProviding = CalendarBusyProvider.shared) {
         self.defaults = defaults
+        self.busyProvider = busyProvider
+        if calendarQuietEnabled { startObservingCalendarIfNeeded() }
     }
 
     private func globalKey(_ base: WatchScopedKey) -> String { base.rawValue }
@@ -99,10 +118,46 @@ final class QuietHoursManager: @unchecked Sendable {
         return override.mode
     }
 
-    /// What `evaluate()` would push right now (schedule + override
-    /// resolved), without touching the watch. For UI display.
-    var effectiveMode: QuietMode {
-        overrideMode ?? QuietHours.desiredMode(schedule: schedule, now: Date())
+    /// Whether the watch should also go quiet during calendar events marked
+    /// Busy/Unavailable that the user organized or accepted (not all-day).
+    /// Global preference, same storage shape as `schedule`/`overrideMode`.
+    var calendarQuietEnabled: Bool {
+        get { defaults.bool(forKey: globalKey(.calendarQuietEnabled)) }
+        set { defaults.set(newValue, forKey: globalKey(.calendarQuietEnabled)) }
+    }
+
+    /// What `evaluate()` would push right now (override, schedule, and
+    /// calendar-busy resolved), without touching the watch. For UI display.
+    /// Union precedence: quiet if the schedule window is active OR a
+    /// calendar-busy event is happening; a manual override wins over both.
+    var status: QuietStatus {
+        if let overrideMode { return QuietStatus(mode: overrideMode, source: .override) }
+        let now = Date()
+        let scheduleNight = QuietHours.desiredMode(schedule: schedule, now: now) == .night
+        let calendarBusy = calendarQuietEnabled
+            && CalendarBusy.isBusy(busyProvider.busyIntervals(now: now), now: now)
+        switch (scheduleNight, calendarBusy) {
+        case (true, true): return QuietStatus(mode: .night, source: .both)
+        case (true, false): return QuietStatus(mode: .night, source: .schedule)
+        case (false, true): return QuietStatus(mode: .night, source: .calendarBusy)
+        case (false, false): return QuietStatus(mode: .day, source: .off)
+        }
+    }
+
+    var effectiveMode: QuietMode { status.mode }
+
+    /// The next Date after `now` at which `status.mode` would change absent
+    /// a manual override — the schedule boundary, or (if calendar-busy
+    /// detection is on) whichever of the schedule/calendar boundaries comes
+    /// first. Used to give `BGAppRefreshTask` an opportunistic
+    /// earliest-begin-date. Reads the calendar cache as-is (no refresh) —
+    /// callers that need it fresh should `await busyProvider.refresh` first,
+    /// as `evaluate()` does.
+    func nextBoundary(now: Date) -> Date? {
+        let scheduleBoundary = QuietHours.nextBoundary(schedule: schedule, now: now)
+        guard calendarQuietEnabled else { return scheduleBoundary }
+        let calendarBoundary = CalendarBusy.nextBoundary(busyProvider.busyIntervals(now: now), now: now)
+        return [scheduleBoundary, calendarBoundary].compactMap { $0 }.min()
     }
 
     /// Sets or clears the manual override and re-evaluates immediately
@@ -110,12 +165,42 @@ final class QuietHoursManager: @unchecked Sendable {
     /// nil returns to the schedule (or always-day if the schedule is off).
     func setOverride(_ mode: QuietMode?) async {
         if let mode {
-            let expiry = QuietHours.nextBoundary(schedule: schedule, now: Date())
+            let expiry = nextBoundary(now: Date())
             saveOverride(QuietOverride(mode: mode, expiry: expiry))
         } else {
             defaults.removeObject(forKey: globalKey(.quietOverride))
         }
         await evaluate()
+    }
+
+    /// Enables/disables the calendar-busy trigger. Turning it on requests
+    /// calendar access first (a no-op prompt if already granted, e.g. via
+    /// the calendar-sync toggle) and returns `false` without enabling if
+    /// denied. Turning off never prompts and always succeeds.
+    @discardableResult
+    func setCalendarQuietEnabled(_ on: Bool) async -> Bool {
+        if on {
+            guard await busyProvider.requestAccessIfNeeded() else { return false }
+            startObservingCalendarIfNeeded()
+        }
+        calendarQuietEnabled = on
+        await evaluate()
+        return true
+    }
+
+    /// Lazily starts listening for calendar changes so an edited/cancelled
+    /// meeting is picked up promptly. Mirrors `CalendarSync.observeChanges()`
+    /// — added once, never torn down (a fire while disabled just triggers a
+    /// harmless no-op `evaluate()`).
+    private func startObservingCalendarIfNeeded() {
+        calendarObserverLock.withLock {
+            guard calendarObserverToken == nil else { return }
+            calendarObserverToken = NotificationCenter.default.addObserver(
+                forName: .EKEventStoreChanged, object: nil, queue: nil
+            ) { [weak self] _ in
+                Task { await self?.evaluate() }
+            }
+        }
     }
 
     /// Pushes the matching notification filter if the desired mode changed
@@ -126,6 +211,9 @@ final class QuietHoursManager: @unchecked Sendable {
         let watch = WatchManager.shared
         guard let token = WatchSession.connectionToken ?? watch.connectionTokenSync(),
               watch.validatesConnectionToken(token) else { return }
+        if calendarQuietEnabled {
+            await busyProvider.refresh(now: Date())
+        }
         let desired = effectiveMode
         let key = appliedKey(watchID: token.watchID)
         let applied = defaults.string(forKey: key).flatMap(QuietMode.init(rawValue:))

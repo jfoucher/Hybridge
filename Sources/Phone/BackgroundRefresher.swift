@@ -46,9 +46,11 @@ final class BackgroundRefresher: @unchecked Sendable {
         // Opportunistic wake near the next quiet-hours boundary too, so the
         // filter swap lands within minutes rather than waiting for the next
         // sync-driven wake (which can be up to autoSyncInterval late).
-        let schedule = QuietHoursManager.shared.schedule
+        // `nextBoundary` folds in the calendar-busy signal (if enabled) on
+        // top of the fixed schedule, reading whatever's cached rather than
+        // refreshing — a stale cache just falls back to `syncDate`.
         if WatchRegistry.activeKindSync().hasQuietHours,
-           let boundary = QuietHours.nextBoundary(schedule: schedule, now: Date()) {
+           let boundary = QuietHoursManager.shared.nextBoundary(now: Date()) {
             request.earliestBeginDate = min(syncDate, boundary)
         } else {
             request.earliestBeginDate = syncDate
