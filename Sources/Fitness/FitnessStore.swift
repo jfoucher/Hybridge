@@ -66,6 +66,17 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
     /// Most recent sync across all watches (the Fitness screen label).
     var lastSyncDate: Date? { lastSyncByWatch.values.max() }
 
+    /// Timestamp of the newest synced data point across samples, SpO₂ and
+    /// workouts — `samples`/`spo2Samples` are kept sorted, so their last
+    /// element is the max in O(1); `workouts` is small enough to scan.
+    var latestDataTimestamp: Date? {
+        var newest: Int?
+        if let ts = samples.last?.timestamp { newest = ts }
+        if let ts = spo2Samples.last?.timestamp { newest = max(newest ?? ts, ts) }
+        if let ts = workouts.map(\.endTimestamp).max() { newest = max(newest ?? ts, ts) }
+        return newest.map { Date(timeIntervalSince1970: TimeInterval($0)) }
+    }
+
     private static let retentionDays = 120
     private static let legacySyncKey = "legacy"
 

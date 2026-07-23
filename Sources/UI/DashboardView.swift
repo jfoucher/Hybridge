@@ -255,13 +255,13 @@ struct DashboardView: View {
     private func batteryPill(_ level: Int) -> some View {
         HStack(spacing: 6) {
             BatteryGlyph(level: level, fill: batteryColor(level))
-            Text("\(level)%")
+            Text("\(level, format: .percent)")
                 .font(Theme.mono(13, weight: .semibold))
                 .foregroundStyle(Theme.ink)
         }
         .pill()
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Battery \(level)%")
+        .accessibilityLabel("Battery \(level, format: .percent)")
     }
 
     private func batteryColor(_ level: Int) -> Color {
@@ -433,7 +433,7 @@ private struct StepsTile: View {
                         .font(Theme.mono(16, weight: .semibold))
                         .foregroundStyle(Theme.ink)
                         .padding(.top, 8)
-                    Text("\(Int((progress * 100).rounded()))%")
+                    Text("\(Double(progress), format: .percent.precision(.fractionLength(0)))")
                         .font(.system(size: 9))
                         .foregroundStyle(Theme.sub)
                 }

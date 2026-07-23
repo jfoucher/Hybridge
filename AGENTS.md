@@ -31,6 +31,12 @@ Prefer `scripts/xbuild.sh build` / `scripts/xbuild.sh test [only-testing-target]
 
 There is one scheme, `Hybridge`. BLE only works on a real iPhone (the simulator has no Bluetooth), so anything involving the watch itself can only be verified on-device via Xcode; unit tests cover the pure logic only (CRCs, AES vectors, payload/container formats, activity parsing — plus an `ActivityParser` fuzz suite that pins "never traps on malformed input").
 
+## Source control
+
+Do not ever, under any circumstance, run ANY git command. The user does that himself.
+Do not touch the .gitignore file, do not add and do not remove anything from the index.
+
+
 ## Architecture
 
 The core design is a **serialized request queue over CoreBluetooth**:

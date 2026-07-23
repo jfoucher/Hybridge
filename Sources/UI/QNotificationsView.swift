@@ -15,9 +15,31 @@ struct QNotificationsView: View {
     @State private var addingContactByName = false
     @State private var newContactName = ""
     @State private var pushTask: Task<Void, Never>?
+    @State private var quietEffective = QuietHoursManager.shared.effectiveMode
 
     var body: some View {
         List {
+            Section {
+                NavigationLink {
+                    QuietHoursSettingsView(onChange: {
+                        quietEffective = QuietHoursManager.shared.effectiveMode })
+                } label: {
+                    HStack {
+                        Image(systemName: "moon").foregroundStyle(.tint)
+                        Text("Quiet hours").foregroundStyle(.primary)
+                        Spacer()
+                        if quietEffective == .night {
+                            Text("Quiet now")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                Text("Quiet hours")
+            } footer: {
+                Text("Blocks every notification on the watch during the scheduled window, regardless of the alerts below.")
+            }
+
             Section {
                 if alerts.isEmpty {
                     Text("No alerts yet. Add an app or a contact with +.")
@@ -73,6 +95,7 @@ struct QNotificationsView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .activeWatchChanged)) { _ in
             alerts = QNotificationStore.alerts
+            quietEffective = QuietHoursManager.shared.effectiveMode
         }
         .sheet(item: $editing) { alert in
             QAlertEditView(alert: alert, onSave: { updated in

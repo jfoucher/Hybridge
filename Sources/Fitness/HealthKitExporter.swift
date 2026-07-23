@@ -1,5 +1,6 @@
 import Foundation
 import HealthKit
+import Combine
 
 @MainActor
 protocol HealthStoreWriting: AnyObject {
@@ -138,6 +139,38 @@ final class HealthKitExporter: ObservableObject {
     /// reentrancy at HealthKit `await` points from starting a second export.
     private var activeExport: Task<Int, Error>?
 
+    private static let autoExportKey = "healthAutoExportEnabled"
+    private var autoExportCancellable: AnyCancellable?
+
+    /// Watches `fitness`'s published arrays so newly-synced samples reach
+    /// Apple Health while the app is foregrounded, without waiting for the
+    /// next scheduled `BackgroundRefresher` run (which covers the app-suspended
+    /// case on its own timer via `exportToHealthIfEnabled`). No-op unless the
+    /// "auto-export" setting is on and HealthKit is already authorized —
+    /// mirrors `BackgroundRefresher`'s no-prompt gate so a background-launched
+    /// foreground session never surprises the user with a permission sheet.
+    func startAutoExportObserving(_ fitness: FitnessStore) {
+        guard autoExportCancellable == nil else { return }
+        let publishers: [AnyPublisher<Void, Never>] = [
+            fitness.$samples.map { _ in () }.eraseToAnyPublisher(),
+            fitness.$spo2Samples.map { _ in () }.eraseToAnyPublisher(),
+            fitness.$workouts.map { _ in () }.eraseToAnyPublisher(),
+        ]
+        autoExportCancellable = Publishers.MergeMany(publishers)
+            // Coalesces one sync's several array updates into one export.
+            .debounce(for: .seconds(3), scheduler: DispatchQueue.main)
+            .sink { [weak self, weak fitness] in
+                guard let fitness else { return }
+                Task { await self?.autoExportIfEnabled(from: fitness) }
+            }
+    }
+
+    private func autoExportIfEnabled(from fitness: FitnessStore) async {
+        guard UserDefaults.standard.bool(forKey: Self.autoExportKey) else { return }
+        guard isAvailable, canExportWithoutPrompt else { return }
+        _ = try? await exportNewSamples(from: fitness, requestingAuthorization: false)
+    }
+
     init(store: (any HealthStoreWriting)? = nil, defaults: UserDefaults = .standard) {
         let store = store ?? LiveHealthStoreWriter()
         self.store = store
@@ -243,6 +276,15 @@ final class HealthKitExporter: ObservableObject {
 
     func requestAuthorization() async throws {
         try await store.requestAuthorization()
+    }
+
+    /// Whether `fitness` holds any data point not yet covered by
+    /// `exportedRanges` — lets the UI disable the export button instead of
+    /// running an export just to discover there's nothing to do.
+    func hasNewData(in fitness: FitnessStore) -> Bool {
+        guard let latest = fitness.latestDataTimestamp else { return false }
+        guard let lastExportDate else { return true }
+        return latest > lastExportDate
     }
 
     /// Whether at least one type is already authorized, so a background

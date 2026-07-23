@@ -82,7 +82,7 @@ final class BatteryWatcher: @unchecked Sendable {
             : String(localized: "time to replace its battery")
         let content = UNMutableNotificationContent()
         content.title = String(localized: "Watch battery low")
-        content.body = String(localized: "\(watchName) is at \(level)% — \(advice).")
+        content.body = String(localized: "\(watchName) is at \(level, format: .percent) — \(advice).")
         content.sound = .default
         let identifier = watchID.map { "watchBatteryLow.\($0.uuidString)" } ?? "watchBatteryLow"
         let request = UNNotificationRequest(identifier: identifier,

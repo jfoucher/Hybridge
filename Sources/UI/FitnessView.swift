@@ -388,8 +388,8 @@ struct FitnessView: View {
         let vals = fitness.spo2Samples.map(\.value)
         guard let lo = vals.min(), let hi = vals.max() else { return nil }
         return lo == hi
-            ? String(localized: "\(lo)%")
-            : String(localized: "\(lo)–\(hi)%")
+            ? String(localized: "\(lo, format: .percent)")
+            : String(localized: "\(lo, format: .percent)–\(hi, format: .percent)")
     }
 
     private var workoutsThisWeek: String {
@@ -400,26 +400,39 @@ struct FitnessView: View {
 
     // MARK: Export
 
+    private var hasNewDataToExport: Bool { health.hasNewData(in: fitness) }
+
     private var exportButton: some View {
-        Button {
-            runBusy("Exporting to Apple Health…") {
-                let count = try await health.exportNewSamples(from: fitness)
-                return "Exported \(count) samples to Apple Health."
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                runBusy("Exporting to Apple Health…") {
+                    let count = try await health.exportNewSamples(from: fitness)
+                    return "Exported \(count) samples to Apple Health."
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "heart.fill")
+                    Text("Export to Apple Health")
+                }
+                .font(Theme.sans(16, weight: .semibold, relativeTo: .body))
+                .foregroundStyle(Theme.bg)
+                .frame(maxWidth: .infinity)
+                .padding(16)
+                .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.ink))
             }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "heart.fill")
-                Text("Export to Apple Health")
+            .buttonStyle(.plain)
+            .disabled(!health.isAvailable || busyText != nil || !hasNewDataToExport)
+            .opacity(health.isAvailable && hasNewDataToExport ? 1 : 0.5)
+
+            if health.isAvailable && !hasNewDataToExport {
+                Text(autoExportEnabled
+                     ? "Everything is already in Apple Health — new samples export automatically."
+                     : "Everything is already in Apple Health.")
+                    .font(Theme.sans(12, relativeTo: .caption))
+                    .foregroundStyle(Theme.sub)
+                    .padding(.horizontal, 4)
             }
-            .font(Theme.sans(16, weight: .semibold, relativeTo: .body))
-            .foregroundStyle(Theme.bg)
-            .frame(maxWidth: .infinity)
-            .padding(16)
-            .background(RoundedRectangle(cornerRadius: 16, style: .continuous).fill(Theme.ink))
         }
-        .buttonStyle(.plain)
-        .disabled(!health.isAvailable || busyText != nil)
-        .opacity(health.isAvailable ? 1 : 0.5)
     }
 
     // MARK: Day picker sheet

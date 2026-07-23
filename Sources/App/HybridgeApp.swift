@@ -9,6 +9,7 @@ struct HybridgeApp: App {
     init() {
         Theme.configureAppearance()
         WidgetBridge.shared.start()
+        HealthKitExporter.shared.startAutoExportObserving(FitnessStore.shared)
         BackgroundRefresher.shared.register()
     }
 

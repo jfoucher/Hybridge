@@ -33,7 +33,7 @@ There is one scheme, `Hybridge`. BLE only works on a real iPhone (the simulator 
 
 ## Source control
 
-Do not ever, under any circumstance, commit any code. The user does that himself.
+Do not ever, under any circumstance, run ANY git command. The user does that himself.
 Do not touch the .gitignore file, do not add and do not remove anything from the index.
 
 ## Architecture

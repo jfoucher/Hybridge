@@ -9,11 +9,30 @@ struct NotificationsView: View {
     @ObservedObject private var store = NotificationIconStore.shared
     @State private var adding = false
     @State private var pushTask: Task<Void, Never>?
+    @State private var quietEffective = QuietHoursManager.shared.effectiveMode
 
     var body: some View {
         ThemedScreen("Notifications") {
             VStack(alignment: .leading, spacing: 0) {
-                SectionLabel("Filter")
+                SectionLabel("Quiet hours")
+                ThemedCard {
+                    navRow(icon: "moon", title: "Quiet hours",
+                           destination: { QuietHoursSettingsView(onChange: {
+                               quietEffective = QuietHoursManager.shared.effectiveMode }) }) {
+                        if quietEffective == .night {
+                            Text("Quiet now")
+                                .font(Theme.sans(13, weight: .semibold, relativeTo: .footnote))
+                                .foregroundStyle(Theme.accent)
+                                .padding(.vertical, 4).padding(.horizontal, 9)
+                                .background(Capsule().fill(Theme.accent.opacity(0.12)))
+                        }
+                    }
+                }
+                Footer("Blocks every notification on the watch during the scheduled window, regardless of the filter below.")
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                SectionLabel("Filter").padding(.top, 26)
                 ThemedCard {
                     SettingsRow(icon: "bell.badge", title: "Manage watch notifications") {
                         Toggle(isOn: $store.isEnabled) { EmptyView() }.labelsHidden().brassToggle()
@@ -85,6 +104,18 @@ struct NotificationsView: View {
         .onChange(of: store.isEnabled) { _, enabled in
             if enabled { schedulePush() } else { pushTask?.cancel() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .activeWatchChanged)) { _ in
+            quietEffective = QuietHoursManager.shared.effectiveMode
+        }
+        .task { quietEffective = QuietHoursManager.shared.effectiveMode }
+    }
+
+    private func navRow<D: View, T: View>(icon: String, title: LocalizedStringResource,
+                                          @ViewBuilder destination: @escaping () -> D,
+                                          @ViewBuilder trailing: @escaping () -> T) -> some View {
+        NavigationLink { destination() } label: {
+            SettingsRow(icon: icon, title: title, showChevron: true, trailing: trailing)
+        }.buttonStyle(PressableRow())
     }
 
     private func appRow(_ entry: NotificationIconStore.Entry) -> some View {

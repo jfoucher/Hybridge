@@ -7,6 +7,7 @@ struct SettingsView: View {
     @EnvironmentObject var watch: WatchManager
     @EnvironmentObject var registry: WatchRegistry
     @AppStorage("stepGoal") private var stepGoal = 10000
+    @AppStorage("healthAutoExportEnabled") private var healthAutoExportEnabled = false
     @AppStorage("vibrationStrength") private var vibrationStrength = 100
     @AppStorage("useMetric") private var useMetric = true
     @State private var stepGoalPushTask: Task<Void, Never>?
@@ -15,7 +16,6 @@ struct SettingsView: View {
     @ObservedObject private var calendarSync = CalendarSync.shared
     @State private var weatherEnabled = WeatherProvider.shared.isEnabled
     @State private var calendarEnabled = CalendarSync.shared.isEnabled
-    @State private var quietEffective = QuietHoursManager.shared.effectiveMode
     @AppStorage("heartRateMode") private var heartRateMode = -1
     @State private var batteryAlertEnabled = BatteryWatcher.shared.isEnabled
     @State private var batteryAlertThreshold = BatteryWatcher.shared.threshold
@@ -42,14 +42,12 @@ struct SettingsView: View {
             }
             .toolbar(.hidden, for: .navigationBar)
             .onReceive(NotificationCenter.default.publisher(for: .activeWatchChanged)) { _ in
-                quietEffective = QuietHoursManager.shared.effectiveMode
                 refreshToken += 1
             }
-            .task { refreshBatteryPermission(); quietEffective = QuietHoursManager.shared.effectiveMode }
+            .task { refreshBatteryPermission() }
             .onReceive(NotificationCenter.default.publisher(
                 for: UIApplication.willEnterForegroundNotification)) { _ in
                 refreshBatteryPermission()
-                quietEffective = QuietHoursManager.shared.effectiveMode
             }
             .onReceive(NotificationCenter.default.publisher(
                 for: .homeAssistantIntegrationChanged)) { _ in
@@ -64,7 +62,7 @@ struct SettingsView: View {
 
     private var healthGroup: some View {
         VStack(alignment: .leading, spacing: 0) {
-            SectionLabel("Health")
+            SectionLabel("Fitness")
             ThemedCard {
                 if kind.hasWorkouts {
                     navRow(icon: "figure.walk.motion", title: "Activity detection",
@@ -90,12 +88,24 @@ struct SettingsView: View {
                            value: bodyMetricsSummary, mono: true,
                            destination: { BodyMetricsView() })
                 }
+                Hairline(leading: 59)
+                SettingsRow(icon: "heart.text.square", title: "Auto-export to Health") {
+                    Toggle(isOn: $healthAutoExportEnabled) { EmptyView() }.labelsHidden().brassToggle()
+                        .accessibilityLabel("Auto-export to Health")
+                }
+                .onChange(of: healthAutoExportEnabled) { _, on in
+                    if on {
+                        Task {
+                            _ = try? await HealthKitExporter.shared.exportNewSamples(from: FitnessStore.shared)
+                        }
+                    }
+                }
             }
             .onChange(of: stepGoal) { _, value in
                 NotificationCenter.default.post(name: .widgetRelevantSettingChanged, object: nil)
                 pushStepGoalDebounced(value)
             }
-            Footer("These preferences apply to every compatible watch when it connects. Body metrics let supported watches estimate calories.")
+            Footer("These preferences apply to every compatible watch when it connects. Body metrics let supported watches estimate calories. Auto-export sends newly synced data to Apple Health as it arrives, and periodically in the background.")
         }
         .id(refreshToken)   // recompute the summary after editing
     }
@@ -149,20 +159,6 @@ struct SettingsView: View {
                 .onChange(of: useMetric) { _, on in
                     guard kind != .misfitQ else { return }
                     applyConfig([.units(on ? 8 : (8 | 4 | 1))], success: "Units updated")
-                }
-                if kind.hasQuietHours {
-                    Hairline(leading: 59)
-                    navRow(icon: "moon", title: "Quiet hours",
-                           destination: { QuietHoursSettingsView(onChange: {
-                               quietEffective = QuietHoursManager.shared.effectiveMode }) }) {
-                        if quietEffective == .night {
-                            Text("Quiet now")
-                                .font(Theme.sans(13, weight: .semibold, relativeTo: .footnote))
-                                .foregroundStyle(Theme.accent)
-                                .padding(.vertical, 4).padding(.horizontal, 9)
-                                .background(Capsule().fill(Theme.accent.opacity(0.12)))
-                        }
-                    }
                 }
                 if kind.hasWeather {
                     Hairline(leading: 59)
@@ -218,7 +214,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Footer("Blocks every notification on the watch during quiet hours. Low-battery notifies once per charge when the level drops below the threshold.")
+            Footer("Low-battery notifies once per charge when the level drops below the threshold.")
         }
     }
 

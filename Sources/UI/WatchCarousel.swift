@@ -318,7 +318,7 @@ struct WatchManageSheet: View {
             if isActiveReady, let battery = watch.batteryLevel {
                 Hairline(leading: 59)
                 SettingsRow(icon: "battery.75", title: "Battery") {
-                    Text("\(battery)%").font(Theme.mono(14)).foregroundStyle(Theme.sub)
+                    Text("\(battery, format: .percent)").font(Theme.mono(14)).foregroundStyle(Theme.sub)
                 }
             }
             if kind.needsAuthKey {
