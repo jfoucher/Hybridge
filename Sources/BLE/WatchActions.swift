@@ -151,10 +151,10 @@ extension WatchManager {
             }
             if let steps = config.currentStepCount {
                 self.watchStepCount = steps
-                if let watchID {
-                    FitnessStore.shared.recordLiveStepCount(steps, for: watchID)
-                }
             }
+        }
+        if let steps = config.currentStepCount, let watchID {
+            await FitnessStore.shared.recordLiveStepCount(steps, for: watchID)
         }
         if let level = config.batteryPercentage {
             BatteryWatcher.shared.check(level: level)
@@ -938,10 +938,8 @@ extension WatchManager {
         do {
             try await writeConfig([.currentStepCount(UInt32(total))])
             await FitnessStore.shared.recordPushedStepBaseline(total, for: watchID)
-            await MainActor.run {
-                FitnessStore.shared.recordLiveStepCount(total, for: watchID)
-                self.watchStepCount = total
-            }
+            await FitnessStore.shared.recordLiveStepCount(total, for: watchID)
+            await MainActor.run { self.watchStepCount = total }
             addLog("Step counter synced to watch: \(total)")
         } catch {
             addLog("Step counter sync failed: \(error.localizedDescription)")

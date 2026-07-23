@@ -216,6 +216,7 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
                     self.workouts = archive.workouts
                     self.lastSyncByWatch = archive.lastSyncByWatch ?? [:]
                     self.legacyLastSync = archive.lastSync
+                    self.pushedStepBaselineByWatch = Self.decodeStepBaselines(archive.pushedStepBaselineByWatch)
                 }
                 self.loadBlocked = outcome.blocked
                 self.loadFailed = outcome.failed
@@ -300,9 +301,7 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
             workouts = archive.workouts
             lastSyncByWatch = archive.lastSyncByWatch ?? [:]
             legacyLastSync = archive.lastSync
-            pushedStepBaselineByWatch = Dictionary(
-                uniqueKeysWithValues: (archive.pushedStepBaselineByWatch ?? [:])
-                    .compactMap { key, value in UUID(uuidString: key).map { ($0, value) } })
+            pushedStepBaselineByWatch = Self.decodeStepBaselines(archive.pushedStepBaselineByWatch)
             // `merge` keeps these sorted, but archives written before that
             // (or hand-edited ones) may not be, and the range lookups below
             // binary-search. Cheap on already-sorted input.
@@ -361,6 +360,13 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
                 lastSync: legacyLastSync, lastSyncByWatch: lastSyncByWatch,
                 pushedStepBaselineByWatch: Dictionary(
                     uniqueKeysWithValues: pushedStepBaselineByWatch.map { ($0.key.uuidString, $0.value) }))
+    }
+
+    /// String-keyed archive dictionary back to `[UUID: Int]`, dropping any
+    /// key that fails to parse (defensive against hand-edited archives).
+    private static func decodeStepBaselines(_ raw: [String: Int]?) -> [UUID: Int] {
+        Dictionary(uniqueKeysWithValues: (raw ?? [:])
+            .compactMap { key, value in UUID(uuidString: key).map { ($0, value) } })
     }
 
     /// Encodes and writes `archive` to `url`. Pure and thread-agnostic, so the
@@ -816,8 +822,17 @@ final class FitnessStore: ObservableObject, @unchecked Sendable {
         return total
     }
 
-    func recordLiveStepCount(_ count: Int, for watchID: UUID, at date: Date = Date()) {
-        liveStepCountsByWatch[watchID] = LiveStepCount(count: max(0, count), observedAt: date)
+    /// Awaits the initial load first: `FitnessStore.shared` loads its archive
+    /// asynchronously, and a BLE config read can otherwise land here before
+    /// `pushedStepBaselineByWatch` has been read back from disk — reproducing
+    /// the exact same instant-doubling this dictionary was persisted to fix,
+    /// just moved from "forgotten across a relaunch" to "not loaded yet at
+    /// the first connect after one."
+    func recordLiveStepCount(_ count: Int, for watchID: UUID, at date: Date = Date()) async {
+        if let initialLoadTask { await initialLoadTask.value }
+        await MainActor.run {
+            self.liveStepCountsByWatch[watchID] = LiveStepCount(count: max(0, count), observedAt: date)
+        }
     }
 
     /// Records the total we just wrote into `watchID`'s step register, and

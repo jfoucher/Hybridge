@@ -359,10 +359,10 @@ final class FitnessStoreMultiWatchTests: XCTestCase {
         await store.merge(samples: [makeSample(midnight + 120, steps: 200)],
                           spo2: [], workouts: [], from: watchB)
 
-        store.recordLiveStepCount(150, for: watchA)
+        await store.recordLiveStepCount(150, for: watchA)
         XCTAssertEqual(store.stepsIncludingLive(onDay: Date()), 350)
 
-        store.recordLiveStepCount(260, for: watchB)
+        await store.recordLiveStepCount(260, for: watchB)
         XCTAssertEqual(store.stepsIncludingLive(onDay: Date()), 410,
                        "both watches contribute, independent of which one is active")
     }
@@ -373,9 +373,9 @@ final class FitnessStoreMultiWatchTests: XCTestCase {
         await store.merge(samples: [makeSample(midnight + 60, steps: 100)],
                           spo2: [], workouts: [], from: watchA)
 
-        store.recordLiveStepCount(80, for: watchA)
-        store.recordLiveStepCount(500, for: watchB,
-                                  at: Date(timeIntervalSince1970: TimeInterval(midnight - 60)))
+        await store.recordLiveStepCount(80, for: watchA)
+        await store.recordLiveStepCount(500, for: watchB,
+                                        at: Date(timeIntervalSince1970: TimeInterval(midnight - 60)))
 
         XCTAssertEqual(store.stepsIncludingLive(onDay: Date()), 100,
                        "a reset/lower counter and yesterday's observation must not reduce or inflate today")
@@ -390,7 +390,7 @@ final class FitnessStoreMultiWatchTests: XCTestCase {
 
         // Switching to watch B pushes the cross-watch total into it.
         await store.recordPushedStepBaseline(2500, for: watchB)
-        store.recordLiveStepCount(2500, for: watchB)
+        await store.recordLiveStepCount(2500, for: watchB)
         XCTAssertEqual(store.stepsIncludingLive(onDay: Date()), 2500,
                        "the just-pushed baseline must not be added again")
 
@@ -398,9 +398,31 @@ final class FitnessStoreMultiWatchTests: XCTestCase {
         // `pushDailyStepBaseline` runs again. Without the persisted baseline
         // this used to double the total for an instant.
         let reloaded = FitnessStore(fileURL: fileURL)
-        reloaded.recordLiveStepCount(2500, for: watchB)
+        await reloaded.recordLiveStepCount(2500, for: watchB)
         XCTAssertEqual(reloaded.stepsIncludingLive(onDay: Date()), 2500,
                        "a relaunch must remember watch B's already-reconciled baseline")
+    }
+
+    /// `FitnessStore.shared` loads its archive asynchronously in production
+    /// (`loadAsynchronously: true`) — a BLE config read landing before that
+    /// load finishes must not see an empty `pushedStepBaselineByWatch` and
+    /// briefly double the total, which is what happened before
+    /// `recordLiveStepCount` started awaiting the load task itself.
+    func testRecordLiveStepCountAwaitsAsynchronousLoadBeforeMutating() async {
+        let midnight = Int(Calendar.current.startOfDay(for: Date()).timeIntervalSince1970)
+        do {
+            let seed = FitnessStore(fileURL: fileURL)
+            await seed.merge(samples: [makeSample(midnight + 60, steps: 2500)],
+                             spo2: [], workouts: [], from: watchA)
+            await seed.recordPushedStepBaseline(2500, for: watchB)
+        }
+
+        let store = FitnessStore(fileURL: fileURL, loadAsynchronously: true)
+        // No delay: this races the archive's async load exactly as a BLE
+        // config read racing app-launch load would in production.
+        await store.recordLiveStepCount(2500, for: watchB)
+        XCTAssertEqual(store.stepsIncludingLive(onDay: Date()), 2500,
+                       "must not double before the archive (and its baseline) has loaded")
     }
 
     func testResyncFromSameWatchStillDedups() async {
