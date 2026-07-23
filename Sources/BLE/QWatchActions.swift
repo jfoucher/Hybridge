@@ -162,10 +162,10 @@ extension WatchManager {
             }
             if let steps = config.currentStepCount {
                 self.watchStepCount = steps
-                if let watchID {
-                    FitnessStore.shared.recordLiveStepCount(steps, for: watchID)
-                }
             }
+        }
+        if let steps = config.currentStepCount, let watchID {
+            await FitnessStore.shared.recordLiveStepCount(steps, for: watchID)
         }
         if let level = config.batteryPercentage {
             BatteryWatcher.shared.check(level: level)
