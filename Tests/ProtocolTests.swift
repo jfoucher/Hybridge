@@ -173,7 +173,7 @@ final class PayloadTests: XCTestCase {
         XCTAssertEqual(stale.isOutdated, true)
         let unknown = InstalledApp(name: "someRandomApp", version: "1.0", handle: 2)
         XCTAssertNil(unknown.isOutdated)
-        let face = InstalledApp(name: "MyFace", version: "1.13", handle: 3)
+        let face = InstalledApp(name: "MyFace", version: "1.14", handle: 3)
         XCTAssertEqual(face.isOutdated, false)
     }
 
@@ -183,6 +183,7 @@ final class PayloadTests: XCTestCase {
         let push = json["push"] as? [String: Any]
         let set = push?["set"] as? [String: Any]
         XCTAssertEqual(set?["customWatchFace._.config.start_app"] as? String, "stopwatchApp")
+        XCTAssertNotNil(set?["customWatchFace._.config.start_app_seq"] as? Int)
     }
 
     // MARK: Notification filter / icons (GB: NotificationFilterPutHRRequest,

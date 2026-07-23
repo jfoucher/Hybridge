@@ -27,7 +27,7 @@ enum WappError: LocalizedError {
 struct WappBuilder {
     let design: WatchfaceDesign
 
-    static let watchfaceVersion = (major: 1, minor: 13)   // "1.13"
+    static let watchfaceVersion = (major: 1, minor: 14)   // "1.14" — bumped for customFace.bin's check_start_app
 
     private func asset(_ name: String, ext: String) throws -> Data {
         guard let url = Bundle.main.url(forResource: name, withExtension: ext, subdirectory: "fossil_hr"),

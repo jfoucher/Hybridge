@@ -600,10 +600,34 @@ enum JsonPayloads {
     }
 
     /// Launches an installed app on the watch (GB: startAppOnWatch). The key
-    /// lives on the active face's config, so it only works while a
-    /// customWatchFace-based face is shown.
+    /// always targets the fixed literal `customWatchFace` identifier — *not*
+    /// whatever the actual active face happens to be installed as
+    /// (`design.sanitizedName` for a Hybridge custom face, e.g. `sectorFace`
+    /// for a bundled one). This looks wrong (Hybridge installs each design
+    /// under its own name, never literally "customWatchFace") and a first
+    /// attempt at this feature "fixed" it to target the real active
+    /// identifier instead — which a real watch rejected at file-close with a
+    /// firmware-level "verification failed" (CRC/transport already
+    /// succeeded; the reject happens on commit). Cross-checked against
+    /// Gadgetbridge: every one of its analogous pushes (start_app, the theme
+    /// selector, button/menu config) *always* hardcodes a fixed system
+    /// identifier (`customWatchFace`, `themeApp`, `master`, …), never the
+    /// concrete active app's own installed name, even though GB's own custom
+    /// faces could in principle have distinct names too. That's strong
+    /// evidence `customWatchFace` is a firmware-level alias for "whichever
+    /// face is currently active," not a literal identifier match — so this
+    /// reverts to the fixed string GB uses, matching real-world-proven
+    /// behavior over our own theory. start_app_seq rides along in the same
+    /// push: `this.config.start_app` stays set on the watch after we push
+    /// it, so without a value that changes on every call the engine can't
+    /// tell "the phone asked again" from "this is the same request replaying
+    /// on an unrelated redraw" and would either loop re-opening the app or
+    /// never fire the same request twice in a row.
     static func startApp(_ appName: String) -> Data {
-        pushSet(key: "customWatchFace._.config.start_app", value: appName)
+        pushSet(values: [
+            "customWatchFace._.config.start_app": appName,
+            "customWatchFace._.config.start_app_seq": Int(Date().timeIntervalSince1970 * 1000),
+        ])
     }
 
     // MARK: - Buttons (GB: ButtonConfigurationPutRequest)

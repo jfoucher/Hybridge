@@ -408,11 +408,47 @@ extension WatchManager {
         }
     }
 
-    /// Launches an installed watch app. Only works
-    /// while a customWatchFace-based face is active — stock faces are.
+    /// Launches an installed watch app. Only works while a
+    /// customWatchFace-based face is active — stock faces aren't running
+    /// under that app slot and silently ignore the push (see
+    /// `JsonPayloads.startApp`'s doc comment). For Hybridge's own faces this
+    /// also depends on the active engine implementing `check_start_app`
+    /// (custom_face and every bundled face in moon-watch/faces do — an older
+    /// installed build from before that change won't react until
+    /// reinstalled/reactivated).
     func startAppOnWatch(_ appName: String) async throws {
         try await pushJson(JsonPayloads.startApp(appName))
         addLog("Started \(appName) on watch")
+    }
+
+    /// Launches the watch's built-in workout app from the phone. This exists
+    /// specifically so a workout can be started while the app is guaranteed
+    /// to be in the foreground: the watch's own `workoutApp` "started" JSON
+    /// event (`handleWatchJsonRequest`) then drives
+    /// `WorkoutLocationTracker.start()` through the normal path exactly as a
+    /// physical watch-button start would — no separate GPS call needed here.
+    /// That sidesteps the whole class of "workout started on the watch while
+    /// the phone was backgrounded" problem that `WorkoutLocationTracker`'s
+    /// foreground-retry logic otherwise has to paper over after the fact.
+    ///
+    /// This is fire-and-forget at the protocol level (same as Gadgetbridge's
+    /// equivalent) — there's no ack that the app actually launched, only the
+    /// "started" event it may or may not later send. See `startAppOnWatch`'s
+    /// doc comment for the preconditions. So the return value is a
+    /// best-effort signal, not a guarantee: it polls briefly for
+    /// `WorkoutLocationTracker` to report tracking, and returns false if
+    /// nothing arrived in time — which can mean the active watchface doesn't
+    /// support it, or just that the watch is still waiting on the user to
+    /// confirm a workout type on-screen before it reports back.
+    func startWorkoutOnWatch() async throws -> Bool {
+        let token = connectionTokenSync()
+        try await startAppOnWatch("workoutApp")
+        guard let token else { return false }
+        for _ in 0..<20 {   // ~6s
+            if WorkoutLocationTracker.shared.isTracking(for: token) { return true }
+            try await Task.sleep(nanoseconds: 300_000_000)
+        }
+        return false
     }
 
     /// Pushes text into a custom-text widget on the currently active face.

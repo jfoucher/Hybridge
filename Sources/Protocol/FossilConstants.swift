@@ -65,7 +65,7 @@ enum FossilFileHandle: UInt16, CaseIterable {
 /// Latest app/watchface versions.
 /// Installed apps older than these are flagged as out of date.
 enum KnownAppVersions {
-    static let watchface = "1.13"
+    static let watchface = "1.14"
 
     static let apps: [String: String] = [
         "buddyChallengeApp": "2.10",

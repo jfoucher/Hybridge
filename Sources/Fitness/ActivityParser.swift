@@ -304,17 +304,21 @@ struct ActivityParser {
 
             case 0x00:
                 // Captured files use zero padding between the last record and
-                // the container CRC. Padding is a legitimate terminator only
-                // when every remaining content byte is also zero.
-                guard reader.data[reader.position..<contentEnd].allSatisfy({ $0 == 0 }) else {
-                    throw ParseError.invalidRecord(offset: markerOffset, marker: next)
-                }
-                guard reader.skip(contentEnd - reader.position) else {
-                    throw ParseError.invalidTermination(offset: reader.position)
+                // the container CRC — consume it in bulk when every
+                // remaining byte is zero. Otherwise this 0x00 isn't padding,
+                // it's just a non-marker byte; fall through to the same
+                // one-byte resync as `default` below.
+                if reader.data[reader.position..<contentEnd].allSatisfy({ $0 == 0 }) {
+                    _ = reader.skip(contentEnd - reader.position)
                 }
 
             default:
-                throw ParseError.invalidRecord(offset: markerOffset, marker: next)
+                // Some record shapes (e.g. the CE/D3 workout
+                // heart-rate "extras") don't always land
+                // exactly on the next marker. Throwing here quarantined a
+                // real HR watch's workout file; `next` is already consumed, so
+                // this is exactly that resync.
+                break
             }
         }
         guard reader.position == contentEnd else {
@@ -363,6 +367,15 @@ struct ActivityParser {
                 case 0x0D: summary.kind = "Spinning"
                 default: break
                 }
+            // attr 1: not the workout's wall-clock start/end (far too small a
+            // u32 for a Unix timestamp) — likely a device-monotonic clock
+            // (e.g. ms since boot). attr 3: consistently a few seconds less
+            // than attr 2 (duration) across a real multi-checkpoint HR dump —
+            // likely active/moving seconds vs. attr 2's total elapsed. attrs
+            // 10/12/13/14 decode as IEEE-754 floats near round numbers (~5.0,
+            // ~2.0) — meaning unconfirmed (intensity/effort/speed?).
+            // Unverified hypotheses from a single file; not wired up pending
+            // more captures (see the workout-capture procedure discussion).
             default:
                 break
             }
