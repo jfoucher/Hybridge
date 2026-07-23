@@ -1165,7 +1165,7 @@ final class ActivityParserTests: XCTestCase {
         let parser = try ActivityParser.parse(file)
         XCTAssertTrue(parser.isComplete)
         XCTAssertEqual(parser.samples.count, 1)
-        for length in 0..<file.count where length != 56 {
+        for length in 0..<file.count where length != 56 && length != 48 {
             XCTAssertThrowsError(try ActivityParser.parse(file.prefix(length)),
                                  "truncated valid HR fixture parsed at length \(length)")
         }
@@ -1175,6 +1175,15 @@ final class ActivityParserTests: XCTestCase {
         let empty = try ActivityParser.parse(file.prefix(56))
         XCTAssertTrue(empty.isComplete)
         XCTAssertEqual(empty.samples.count, 0)
+        // 48 bytes cuts off before offset 52, the earliest point an HR file
+        // is distinguishable from a no-HR one — indistinguishable from a
+        // genuinely empty no-HR file (44-byte header + 4-byte CRC), so it
+        // parses rather than throws. Real hardware can't produce a shorter-
+        // than-52 truncated HR download either: the transport CRC32 already
+        // rejects a short transfer before this parser ever sees it.
+        let ambiguous = try ActivityParser.parse(file.prefix(48))
+        XCTAssertTrue(ambiguous.isComplete)
+        XCTAssertEqual(ambiguous.samples.count, 0)
     }
 
     /// Builds a synthetic no-HR-variant activity file: version 22, timestamp
@@ -1211,7 +1220,7 @@ final class ActivityParserTests: XCTestCase {
         XCTAssertEqual(parser.samples[1].timestamp, Int(timestamp) + 60)
         XCTAssertFalse(parser.samples[1].isActive)
         XCTAssertEqual(parser.samples[2].stepCount, 50)
-        for length in 0..<file.count where length != 56 {
+        for length in 0..<file.count where length != 56 && length != 48 && length != 52 {
             XCTAssertThrowsError(try ActivityParser.parse(file.prefix(length)),
                                  "truncated valid no-HR fixture parsed at length \(length)")
         }
@@ -1221,6 +1230,16 @@ final class ActivityParserTests: XCTestCase {
         let partial = try ActivityParser.parse(file.prefix(56))
         XCTAssertTrue(partial.isComplete)
         XCTAssertEqual(partial.samples.count, 2)
+        // 48 (44-byte header + 4-byte CRC, zero records) and 52 (+ one clean
+        // record) are likewise complete no-HR files in their own right, not
+        // truncations — a real Q Grant capture with a single record is
+        // exactly 52 bytes (see ActivityParser's minimum-length comment).
+        let empty = try ActivityParser.parse(file.prefix(48))
+        XCTAssertTrue(empty.isComplete)
+        XCTAssertEqual(empty.samples.count, 0)
+        let oneRecord = try ActivityParser.parse(file.prefix(52))
+        XCTAssertTrue(oneRecord.isComplete)
+        XCTAssertEqual(oneRecord.samples.count, 1)
     }
 
     func testRejectsWrongVersion() {

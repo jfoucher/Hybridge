@@ -82,13 +82,20 @@ struct ActivityParser {
     }
 
     private mutating func run(_ file: Data) throws {
-        guard file.count >= 56 else { throw ParseError.tooShort }
+        // 48 = the 44-byte header/record-preamble plus the trailing 4-byte
+        // CRC with zero records — the true minimum valid no-HR file (a real
+        // Q Grant capture with a single record is 52 bytes; one with none
+        // yet recorded is 48). It's also enough to safely read offset 34
+        // below. A file this short can never be the HR variant (its marker
+        // stream starts at offset 52), so the offset-52 sniff below is only
+        // attempted once the file is actually long enough to contain it.
+        guard file.count >= 48 else { throw ParseError.tooShort }
         let version = Int(file.u16LE(at: 2))
         guard version == 22 else { throw ParseError.unsupportedVersion(version) }
         currentTimestamp = Int(file.u32LE(at: 8))
 
         let markers: Set<UInt8> = [0xCE, 0xC2, 0xE2, 0xE0, 0xDD, 0xD6, 0xCB, 0xCC, 0xCF]
-        if markers.contains(file.u8(at: 52)) {
+        if file.count > 52, markers.contains(file.u8(at: 52)) {
             try parseHrVariant(file)
         } else {
             try parseNoHrVariant(file)

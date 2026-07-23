@@ -56,11 +56,17 @@ final class ActivityParserFuzzTests: XCTestCase {
     }
 
     func testTinyInputsThrowRatherThanTrap() {
-        for length in 0...56 {
+        for length in 0...56 where length != 48 {
             var data = Data(count: length)
             if length > 3 { data[2] = 22 }
             XCTAssertThrowsError(try ActivityParser.parse(data),
                                  "a sub-header-length file must throw, not parse")
         }
+        // 48 bytes (44-byte header/preamble + 4-byte trailing CRC) is the
+        // true minimum valid file — a no-HR watch with zero new records
+        // produces exactly this, byte-identical to this all-zero buffer.
+        var minimalValid = Data(count: 48)
+        minimalValid[2] = 22
+        XCTAssertNoThrow(try ActivityParser.parse(minimalValid))
     }
 }
