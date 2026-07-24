@@ -142,6 +142,7 @@ final class FileGetRawRequest: FossilRequest {
     }
 
     override var idleTimeout: TimeInterval { 20 }
+    override var isBulkTransfer: Bool { true }
 
     /// Validated file content with the 12-byte header and trailing CRC removed.
     /// `expectedHandle` defaults to the handle this file was fetched from, but

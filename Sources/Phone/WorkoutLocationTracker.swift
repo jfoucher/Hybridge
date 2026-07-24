@@ -108,17 +108,28 @@ final class WorkoutLocationTracker: NSObject, ObservableObject, CLLocationManage
     ///   "open Hybridge" notification on a repeat failure — the user already
     ///   saw it once, and it's now been superseded by this retry attempt.
     func start(for token: WatchConnectionToken? = nil, isRetry: Bool = false) {
-        let accepted = withLock { () -> Bool in
-            guard sessionState == .idle else { return false }
+        let outcome = withLock { () -> (accepted: Bool, differentWatchActive: Bool) in
+            guard sessionState == .idle else {
+                // A workout is already being tracked — there is only one GPS
+                // session. If it belongs to a *different* watch, surface that
+                // rather than silently overwriting its token (multi-watch).
+                return (false, !Self.sameSession(sessionToken, token))
+            }
             lastLocation = nil
             totalDistanceMeters = 0
             polledDistanceMeters = 0
             lastPollDate = Date()
             sessionToken = token
             sessionState = .requestingAuthorization
-            return true
+            return (true, false)
         }
-        guard accepted else { return }
+        guard outcome.accepted else {
+            if outcome.differentWatchActive {
+                WatchManager.shared.addLog(
+                    "Workout GPS: ignoring start — a workout is already being tracked for another watch")
+            }
+            return
+        }
         DispatchQueue.main.async {
             let status = self.manager.authorizationStatus
             let backgrounded = UIApplication.shared.applicationState == .background

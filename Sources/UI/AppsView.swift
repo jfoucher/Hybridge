@@ -1,6 +1,14 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// An app downloaded off the watch, ready to hand to the share sheet.
+/// Identifiable so `.sheet(item:)` presents as soon as the `.wapp` is built.
+private struct ExportedApp: Identifiable {
+    let name: String
+    let url: URL
+    var id: String { url.path }
+}
+
 /// Manage watch apps: list installed apps/watchfaces, delete them, import an
 /// arbitrary .wapp, and install the bundled Home Assistant app.
 struct AppsView: View {
@@ -9,7 +17,7 @@ struct AppsView: View {
     @State private var importing = false
     @State private var pendingFirmware: Data?
     @State private var pendingDelete: InstalledApp?
-    @State private var downloadedApp: (name: String, url: URL)?
+    @State private var exportedApp: ExportedApp?
 
     private var homeAssistantInstalled: Bool {
         watch.installedApps.contains { $0.name == "homeAssistantApp" }
@@ -89,14 +97,6 @@ struct AppsView: View {
                 Text("Installs the bundled, reviewed Home Assistant watch app. Arbitrary app and firmware import is available only in development builds because watch apps can request privileged phone integrations and an incompatible firmware image can permanently damage a watch.")
             }
 
-            if let downloadedApp {
-                Section("Last download") {
-                    ShareLink(item: downloadedApp.url) {
-                        Label("Share \(downloadedApp.name).wapp", systemImage: "square.and.arrow.up")
-                    }
-                }
-            }
-
             if let busyText {
                 Section {
                     HStack {
@@ -112,6 +112,12 @@ struct AppsView: View {
         }
         .navigationTitle("Apps")
         .themedList()
+        .sheet(item: $exportedApp) { app in
+            ShareSheet(url: app.url) {
+                try? FileManager.default.removeItem(at: app.url)
+                exportedApp = nil
+            }
+        }
         .confirmationDialog("Remove app?", isPresented: deleteDialogShown,
                             titleVisibility: .visible) {
             Button("Remove \(pendingDelete?.name ?? "")", role: .destructive) {
@@ -190,7 +196,7 @@ struct AppsView: View {
             let data = try await watch.downloadApp(app)
             let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(app.name).wapp")
             try data.write(to: url)
-            await MainActor.run { downloadedApp = (app.name, url) }
+            await MainActor.run { exportedApp = ExportedApp(name: app.name, url: url) }
         }
     }
 

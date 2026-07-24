@@ -74,8 +74,7 @@ extension WatchConnection {
             // A watch reconnecting mid-window (e.g. at 23:00) goes quiet
             // right away instead of waiting for the next maintenance tick.
             await QuietHoursManager.shared.evaluate()
-            await syncActivityIfDue()
-            await pushDailyStepBaseline()
+            await syncActivityThenPushBaseline()
         } catch {
             guard stillActive() else { return }
             addLog("Q init failed: \(error.localizedDescription)")
@@ -168,7 +167,7 @@ extension WatchConnection {
             await FitnessStore.shared.recordLiveStepCount(steps, for: watchID)
         }
         if let level = config.batteryPercentage {
-            BatteryWatcher.shared.check(level: level)
+            BatteryWatcher.shared.checkAndNotify(level: level, watchID: watchID)
         }
     }
 

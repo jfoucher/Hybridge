@@ -170,7 +170,7 @@ final class QuietHoursManager: @unchecked Sendable {
         } else {
             defaults.removeObject(forKey: globalKey(.quietOverride))
         }
-        await evaluate()
+        await evaluateAll()
     }
 
     /// Enables/disables the calendar-busy trigger. Turning it on requests
@@ -184,7 +184,7 @@ final class QuietHoursManager: @unchecked Sendable {
             startObservingCalendarIfNeeded()
         }
         calendarQuietEnabled = on
-        await evaluate()
+        await evaluateAll()
         return true
     }
 
@@ -198,7 +198,7 @@ final class QuietHoursManager: @unchecked Sendable {
             calendarObserverToken = NotificationCenter.default.addObserver(
                 forName: .EKEventStoreChanged, object: nil, queue: nil
             ) { [weak self] _ in
-                Task { await self?.evaluate() }
+                Task { await self?.evaluateAll() }
             }
         }
     }
@@ -207,10 +207,26 @@ final class QuietHoursManager: @unchecked Sendable {
     /// since the last push and the watch is connected/idle. Errors are
     /// logged, not thrown — the next evaluation (init/maintenance/foreground)
     /// retries.
+    /// Evaluates for the watch whose session is held (or the active watch).
+    /// Called from an init tail / maintenance, which already hold that watch's
+    /// session.
     func evaluate() async {
+        await evaluate(token: WatchSession.connectionToken ?? WatchManager.shared.connectionTokenSync())
+    }
+
+    /// Evaluates every connected watch. Used by the broadcast triggers
+    /// (scene-active, the quiet-mode intent, the calendar-change observer, a
+    /// schedule boundary) so a mode change reaches every watch, not just the
+    /// active one.
+    func evaluateAll() async {
+        for connection in WatchFleet.shared.allConnections() {
+            await evaluate(token: connection.connectionTokenSync())
+        }
+    }
+
+    private func evaluate(token: WatchConnectionToken?) async {
         let watch = WatchManager.shared
-        guard let token = WatchSession.connectionToken ?? watch.connectionTokenSync(),
-              watch.validatesConnectionToken(token) else { return }
+        guard let token, watch.validatesConnectionToken(token) else { return }
         if calendarQuietEnabled {
             await busyProvider.refresh(now: Date())
         }

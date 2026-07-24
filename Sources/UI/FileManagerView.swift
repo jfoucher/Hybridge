@@ -4,10 +4,18 @@ import SwiftUI
 /// (GB: FileManagementActivity). The config/activity files are encrypted at
 /// rest on HR watches; `downloadForExport` decrypts those so they download as
 /// plaintext. Other errors just surface as toasts.
+/// A file downloaded off the watch, ready to hand to the share sheet.
+/// Identifiable so `.sheet(item:)` presents as soon as the bytes are written.
+private struct ExportedFile: Identifiable {
+    let name: String
+    let url: URL
+    var id: String { url.path }
+}
+
 struct FileManagerView: View {
     @EnvironmentObject var watch: WatchManager
     @State private var busy = false
-    @State private var downloaded: (name: String, url: URL)?
+    @State private var exportedFile: ExportedFile?
     @State private var customHandle = ""
 
     var body: some View {
@@ -40,20 +48,18 @@ struct FileManagerView: View {
                 }
             }
 
-            if let downloaded {
-                Section("Last download") {
-                    ShareLink(item: downloaded.url) {
-                        Label("Share \(downloaded.name)", systemImage: "square.and.arrow.up")
-                    }
-                }
-            }
-
             if busy {
                 Section { HStack { ProgressView(); Text("Working…") } }
             }
         }
         .navigationTitle("File manager")
         .themedList()
+        .sheet(item: $exportedFile) { file in
+            ShareSheet(url: file.url) {
+                try? FileManager.default.removeItem(at: file.url)
+                exportedFile = nil
+            }
+        }
     }
 
     private func row(for handle: FossilFileHandle) -> some View {
@@ -97,7 +103,7 @@ struct FileManagerView: View {
                     .appendingPathComponent("\(name)_\(String(format: "%04X", handle)).bin")
                 try data.write(to: url)
                 await MainActor.run {
-                    downloaded = (name, url)
+                    exportedFile = ExportedFile(name: name, url: url)
                     busy = false
                     ToastCenter.shared.success(
                         String(localized: "\(name): \(data.count) bytes"))

@@ -98,8 +98,7 @@ extension WatchConnection {
             // A watch reconnecting mid-window (e.g. at 23:00) goes quiet
             // right away instead of waiting for the next maintenance tick.
             await QuietHoursManager.shared.evaluate()
-            await syncActivityIfDue()
-            await pushDailyStepBaseline()
+            await syncActivityThenPushBaseline()
             await refreshActiveWatchfaceImage()
         } catch {
             guard stillActive() else { return }
@@ -141,7 +140,7 @@ extension WatchConnection {
             await FitnessStore.shared.recordLiveStepCount(steps, for: watchID)
         }
         if let level = config.batteryPercentage {
-            BatteryWatcher.shared.check(level: level)
+            BatteryWatcher.shared.checkAndNotify(level: level, watchID: watchID)
         }
         // Keep the watch's calorie-model inputs in sync with what the user set
         // in our Body metrics screen, using the profile we just read so no
@@ -1111,6 +1110,16 @@ extension WatchConnection {
         // sum) is current right after a sync.
         try? await refreshBattery()
         return newCount
+    }
+
+    /// Activity sync immediately followed by the day's step-baseline push,
+    /// serialized fleet-wide so each watch's baseline is computed after every
+    /// earlier watch's merge landed. Used at the tail of both family inits.
+    func syncActivityThenPushBaseline() async {
+        await Self.stepBaselineGate.run {
+            await self.syncActivityIfDue()
+            await self.pushDailyStepBaseline()
+        }
     }
 
     /// Minimum spacing between automatic activity syncs. Manual syncs (the

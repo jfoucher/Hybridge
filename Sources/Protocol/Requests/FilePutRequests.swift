@@ -22,6 +22,7 @@ class FilePutRawRequest: FossilRequest {
     }
 
     override var idleTimeout: TimeInterval { 30 }
+    override var isBulkTransfer: Bool { true }
 
     override func startData() throws -> Data {
         var data = Data([0x03])

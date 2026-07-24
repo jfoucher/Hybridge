@@ -369,12 +369,22 @@ struct WatchManageSheet: View {
         }
     }
 
+    /// Live keep-connected preference (the `known` snapshot can be stale after
+    /// a toggle, so read it from the registry).
+    private var keepConnected: Bool {
+        (registry.watches.first { $0.id == known.id }?.keepConnected) != false
+    }
+
     private var connectionSection: some View {
         section("Connection", topPadding: 22) {
-            if isActiveReady {
-                SettingsRow(icon: "bolt.slash", title: "Disconnect", tap: { watch.disconnect() })
-                Hairline(leading: 59)
+            SettingsRow(icon: "antenna.radiowaves.left.and.right", title: "Keep connected") {
+                Toggle(isOn: Binding(
+                    get: { keepConnected },
+                    set: { watch.setKeepConnected($0, for: known.id) }
+                )) { EmptyView() }
+                    .labelsHidden().brassToggle()
             }
+            Hairline(leading: 59)
             SettingsRow(icon: "trash", iconTint: Theme.danger,
                         iconFill: Theme.danger.opacity(0.1), title: "Forget watch",
                         titleColor: Theme.danger, tap: { confirmingForget = true })

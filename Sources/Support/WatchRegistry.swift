@@ -17,6 +17,10 @@ struct KnownWatch: Codable, Identifiable, Equatable, Sendable {
     /// Explicit enrollment trust. nil is a roster written by an older build;
     /// those watches were also added by a user gesture and remain trusted.
     var trusted: Bool?
+    /// Whether the fleet should maintain a live connection to this watch. nil
+    /// (older rosters, freshly added watches) means yes — the fleet connects
+    /// every roster watch unless the user explicitly parks one.
+    var keepConnected: Bool?
 }
 
 extension Notification.Name {
@@ -74,7 +78,8 @@ final class WatchRegistry: ObservableObject, @unchecked Sendable {
             } else {
                 registered = KnownWatch(id: id, name: name, modelNumber: nil,
                                         addedDate: Date(), lastConnectedDate: nil,
-                                        kind: nil, firmware: nil, trusted: true)
+                                        kind: nil, firmware: nil, trusted: true,
+                                        keepConnected: true)
                 list.append(registered)
             }
         }
@@ -118,6 +123,13 @@ final class WatchRegistry: ObservableObject, @unchecked Sendable {
             guard let index = list.firstIndex(where: { $0.id == id }) else { return }
             list[index].kind = kind
             list[index].firmware = firmware
+        }
+    }
+
+    func setKeepConnected(_ keep: Bool, for id: UUID) {
+        mutate { list in
+            guard let index = list.firstIndex(where: { $0.id == id }) else { return }
+            list[index].keepConnected = keep
         }
     }
 

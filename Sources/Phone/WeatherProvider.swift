@@ -78,7 +78,9 @@ final class WeatherProvider: NSObject, ObservableObject {
     /// Proactive push right after connect, so complications populate without
     /// the watch having to ask first.
     func pushIfEnabled() async {
-        guard let target = WatchManager.shared.connectionTokenSync(),
+        // Prefer the held session token so a *non-active* watch's init pushes
+        // weather to itself, not to the active watch.
+        guard let target = WatchSession.connectionToken ?? WatchManager.shared.connectionTokenSync(),
               WatchManager.shared.validatesConnectionToken(target),
               isEnabled, let snapshot = await snapshot() else { return }
         await WatchManager.shared.pushJsonWhenIdle(

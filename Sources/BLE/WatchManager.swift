@@ -22,16 +22,20 @@ struct DiscoveredWatch: Identifiable {
 /// the decision separate from CoreBluetooth makes the fail-closed lifecycle
 /// cases exhaustively testable without manufacturing a CBPeripheral.
 struct WatchActionAuthorization {
+    /// Whether a watch-originated action (ring the phone, drive music) may run.
+    /// Deliberately **not** gated on the active watch: with several watches
+    /// connected at once, any *enrolled, trusted, live* watch may drive a phone
+    /// action, not just the one the UI currently shows. Identity is still
+    /// pinned to the exact live connection token + peripheral + family, and the
+    /// watch must be trusted and session-ready (HR additionally authenticated).
     static func allows(token: WatchConnectionToken?,
                        attachedPeripheralID: UUID?,
-                       activeWatchID: UUID?,
                        trusted: Bool,
                        sessionReady: Bool,
                        sessionAuthenticated: Bool,
                        connectedKind: WatchKind) -> Bool {
         guard let token,
               token.peripheralID == attachedPeripheralID,
-              token.watchID == activeWatchID,
               token.kind == connectedKind,
               trusted,
               sessionReady else { return false }
@@ -252,7 +256,8 @@ final class WatchManager: ObservableObject, @unchecked Sendable {
     func switchTo(_ id: UUID) { fleet.switchTo(id) }
     func forget(_ id: UUID) { fleet.forget(id) }
     func disconnect() { fleet.disconnect() }
-    func reconnectActive() { fleet.reconnectActive() }
+    func reconnectActive() { fleet.reconnectAll() }
+    func setKeepConnected(_ keep: Bool, for id: UUID) { fleet.setKeepConnected(keep, for: id) }
     func cancelAdoptionConfirm() { fleet.cancelAdoptionConfirm() }
 
     // MARK: - Waiting / maintenance forwards
@@ -291,7 +296,10 @@ final class WatchManager: ObservableObject, @unchecked Sendable {
     func setTime() async throws { try await requireTarget().setTime() }
     func writeConfig(_ items: [ConfigItem]) async throws { try await requireTarget().writeConfig(items) }
     func setAlarms(_ alarms: [WatchAlarm]) async throws { try await requireTarget().setAlarms(alarms) }
-    func setButtons(_ selections: [ButtonSelection]) async throws { try await requireTarget().setButtons(selections) }
+    /// Button config is global — fan out to every connected HR watch.
+    func setButtons(_ selections: [ButtonSelection]) async throws {
+        try await fleet.fanOut(kind: .hybridHR) { try await $0.setButtons(selections) }
+    }
 
     func setBodyProfile(gender: ConfigItem.Gender, heightCm: Int, weightKg: Int,
                         birthDate: Date) async throws {
@@ -309,7 +317,13 @@ final class WatchManager: ObservableObject, @unchecked Sendable {
                                                        from: from, until: until)
     }
 
-    func setNotificationConfigurations() async throws { try await requireTarget().setNotificationConfigurations() }
+    /// The user's day notification config is a global setting — fan it out to
+    /// every connected HR watch, not just the active one.
+    func setNotificationConfigurations() async throws {
+        try await fleet.fanOut(kind: .hybridHR) { try await $0.setNotificationConfigurations() }
+    }
+    /// Quiet-hours variant is per-watch (target-routed) — a specific watch's
+    /// filter is swapped by its own `evaluate(token:)`.
     func setNotificationFilter(night: Bool) async throws { try await requireTarget().setNotificationFilter(night: night) }
     func playNotification(sender: String, message: String) async throws {
         try await requireTarget().playNotification(sender: sender, message: message)
@@ -348,9 +362,14 @@ final class WatchManager: ObservableObject, @unchecked Sendable {
 
     // Q-family forwards
     func vibrateWatch(_ on: Bool) async throws { try await requireTarget().vibrateWatch(on) }
-    func setQNotificationFilter() async throws { try await requireTarget().setQNotificationFilter() }
+    /// The user's day Q filter is global — fan out to every connected Q watch.
+    func setQNotificationFilter() async throws {
+        try await fleet.fanOut(kind: .fossilQ) { try await $0.setQNotificationFilter() }
+    }
     func setQNotificationFilter(night: Bool) async throws { try await requireTarget().setQNotificationFilter(night: night) }
-    func setQButtons() async throws { try await requireTarget().setQButtons() }
+    func setQButtons() async throws {
+        try await fleet.fanOut(kind: .fossilQ) { try await $0.setQButtons() }
+    }
     func playQTestNotification(for alert: QNotificationAlert) async throws {
         try await requireTarget().playQTestNotification(for: alert)
     }

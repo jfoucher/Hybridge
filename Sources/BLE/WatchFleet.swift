@@ -19,6 +19,12 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
     private let logger = Logger(subsystem: "eu.sixpixels.hybridge", category: "ble")
     private var central: CBCentralManager!
 
+    /// Serializes large file transfers across every watch: only one bulk
+    /// put/get/firmware streams at a time, so two watches can't starve each
+    /// other's radio and trip a request's idle watchdog. Small control
+    /// exchanges are unaffected and still run concurrently across watches.
+    let bulkTransferGate = FleetSerialGate()
+
     /// The connection whose per-watch state the UI facade mirrors.
     @Published private(set) var activeConnection: WatchConnection?
     @Published var discovered: [DiscoveredWatch] = []
@@ -43,12 +49,12 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
     /// bleQueue copy of scanShowsAllDevices (didDiscover runs per advert — no
     /// queue hop for the read).
     private var showAllInScan = false
-    /// Peripheral handed back by iOS state restoration matching the active
-    /// watch, pending adoption.
-    private var restoredPeripheral: CBPeripheral?
-    /// Restored peripherals that are NOT the active watch — their pending
-    /// connects are cancelled once the central is powered on (iOS would
-    /// otherwise keep them alive forever).
+    /// Peripherals handed back by iOS state restoration, keyed by watch id,
+    /// pending adoption once the central is powered on.
+    private var restoredPeripherals: [UUID: CBPeripheral] = [:]
+    /// Restored peripherals that are NOT roster watches we want connected
+    /// (forgotten or parked) — their pending connects are cancelled once the
+    /// central is powered on (iOS would otherwise keep them alive forever).
     private var strayRestoredPeripherals: [CBPeripheral] = []
 
     /// Fires while the app is running to keep a long foreground session fresh
@@ -62,10 +68,14 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
         // Must run before the central is created: state restoration callbacks
         // need the migrated registry.
         AppMigrations.run()
-        // Eagerly create the active watch's connection so the facade has state
-        // to mirror before the link comes up.
-        if let activeID = WatchRegistry.activeWatchIDSync() {
-            activeConnection = ensureConnection(for: activeID)
+        // Eagerly create a connection object for every roster watch (they
+        // report `.disconnected` until the link comes up), and point the facade
+        // at the active one so it has state to mirror before connecting.
+        for watch in WatchRegistry.knownWatchesSync() {
+            let connection = ensureConnection(for: watch.id)
+            if watch.id == WatchRegistry.activeWatchIDSync() {
+                activeConnection = connection
+            }
         }
         central = CBCentralManager(delegate: self, queue: bleQueue,
                                    options: [CBCentralManagerOptionRestoreIdentifierKey: "hybridge.central"])
@@ -90,10 +100,23 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
         periodicSyncTimer = timer
     }
 
-    /// Runs foreground maintenance on the active connection (Stage 1). Stage 2
-    /// fans this out across every ready connection.
+    /// Runs foreground maintenance on every connection concurrently (each has
+    /// its own session; file transfers are serialized by the radio gate).
     func runPeriodicMaintenance() async {
-        await activeConnection?.periodicMaintenance()
+        await withTaskGroup(of: Void.self) { group in
+            for connection in allConnections() {
+                group.addTask { await connection.periodicMaintenance() }
+            }
+        }
+    }
+
+    /// Runs a due activity sync on every connection concurrently.
+    func syncActivityIfDueAll() async {
+        await withTaskGroup(of: Void.self) { group in
+            for connection in allConnections() {
+                group.addTask { await connection.syncActivityIfDue() }
+            }
+        }
     }
 
     // MARK: - Logging
@@ -148,7 +171,9 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
         return connectionsLock.withLock { connections[id] }
     }
 
-    private func allConnections() -> [WatchConnection] {
+    /// Snapshot of every connection object (one per roster watch), for
+    /// fleet-wide fan-out (quiet hours, maintenance, weather/calendar pushes).
+    func allConnections() -> [WatchConnection] {
         connectionsLock.withLock { Array(connections.values) }
     }
 
@@ -157,6 +182,23 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
     }
 
     var hasKnownWatches: Bool { WatchRegistry.hasWatchesSync() }
+
+    /// Runs `body` on every **ready** connection (optionally filtered by watch
+    /// family), attempting each independently and rethrowing the first failure
+    /// after all have been tried. Used to fan a *global* setting (notification
+    /// config, buttons) out to every compatible watch rather than only the
+    /// active one.
+    func fanOut(kind: WatchKind? = nil,
+                _ body: (WatchConnection) async throws -> Void) async throws {
+        var firstError: Error?
+        for connection in allConnections() {
+            if let kind, connection.connectionTokenSync()?.kind != kind { continue }
+            let ready = await MainActor.run { connection.connectionState == .ready }
+            guard ready else { continue }
+            do { try await body(connection) } catch { firstError = firstError ?? error }
+        }
+        if let firstError { throw firstError }
+    }
 
     // MARK: - Scanning / connecting
 
@@ -199,36 +241,54 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
             self.central.stopScan()
             DispatchQueue.main.async { self.isScanning = false }
             let id = peripheral.identifier
-            // Adding/picking a watch while another is attached is a switch:
-            // drop the old live session first (Stage 1 keeps one live link).
-            self.teardownLiveConnections(except: id)
             // A watch already in the roster is a reconnect, not an adoption —
             // only genuinely new watches run the vibrate-and-press gate.
             let isNewWatch = WatchRegistry.shared.watch(id) == nil
             WatchRegistry.shared.register(id: id,
                                           name: peripheral.name ?? String(localized: "Fossil watch"))
+            // Picking a watch never disconnects the others — the fleet keeps a
+            // live link to every roster watch. It just adds this one and makes
+            // it active.
             let connection = self.ensureConnection(for: id)
             self.activateAndReloadScopedState(id)
             connection.userWantsConnection = true
             connection.autoPairOnNextInit = true
             connection.adoptingNewWatch = isNewWatch
+            guard connection.attachedPeripheral == nil else { return }
             connection.attach(peripheral)
             connection.setConnecting()
             self.central.connect(peripheral, options: nil)
         }
     }
 
-    /// Makes `id` the active watch: tears the current live session down and
-    /// connects to it. No-op when it is already the active, attached watch.
+    /// Makes `id` the active watch (which watch the UI/config screens act on).
+    /// The link is not torn down or re-established — every roster watch stays
+    /// connected; this only repoints the facade and ensures the target is
+    /// (re)connecting if it wasn't. Re-enables a parked watch.
     func switchTo(_ id: UUID) {
         bleQueue.async {
-            if WatchRegistry.activeWatchIDSync() == id,
-               self.connection(for: id)?.attachedPeripheral?.identifier == id { return }
+            guard WatchRegistry.activeWatchIDSync() != id else { return }
             let name = WatchRegistry.knownWatchesSync().first { $0.id == id }?.name ?? "watch"
             self.addLog("Switching to \(name)", watchID: id)
-            self.teardownLiveConnections(except: id)
+            WatchRegistry.shared.setKeepConnected(true, for: id)
+            self.ensureConnection(for: id).userWantsConnection = true
             self.activateAndReloadScopedState(id)
-            self.connectActiveLocked()
+            self.connectLocked(id: id)
+        }
+    }
+
+    /// Persists the parked/connected preference for a watch and applies it:
+    /// disconnect when parked, (re)connect when un-parked. On any thread.
+    func setKeepConnected(_ keep: Bool, for id: UUID) {
+        WatchRegistry.shared.setKeepConnected(keep, for: id)
+        bleQueue.async {
+            let connection = self.ensureConnection(for: id)
+            connection.userWantsConnection = keep
+            if keep {
+                self.connectLocked(id: id)
+            } else if let peripheral = connection.attachedPeripheral {
+                self.central.cancelPeripheralConnection(peripheral)
+            }
         }
     }
 
@@ -256,7 +316,7 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
             if WatchRegistry.activeWatchIDSync() == id {
                 if let next = WatchRegistry.knownWatchesSync().first?.id {
                     self.activateAndReloadScopedState(next)
-                    self.connectActiveLocked()
+                    self.connectLocked(id: next)
                 } else {
                     WatchRegistry.shared.setActive(nil)
                     DispatchQueue.main.async { self.activeConnection = nil }
@@ -277,15 +337,6 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// Tears down every live connection whose watch id is not `keepID` (Stage
-    /// 1 single-live-link behaviour). On bleQueue.
-    private func teardownLiveConnections(except keepID: UUID) {
-        for connection in allConnections()
-        where connection.watchID != keepID && connection.attachedPeripheral != nil {
-            teardown(connection)
-        }
-    }
-
     /// Drops a connection's BLE link and clears its per-connection state. The
     /// connection resets its own state; the fleet cancels the central link.
     private func teardown(_ connection: WatchConnection) {
@@ -297,32 +348,36 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// Try to reconnect to the active roster watch without scanning.
-    func reconnectActive() {
-        bleQueue.async { self.connectActiveLocked() }
+    /// Ensures a pending connect for every roster watch that should be
+    /// connected (`FleetConnectPolicy`) and isn't already attached. On bleQueue.
+    func reconnectAll() {
+        bleQueue.async { self.connectAllLocked() }
     }
 
-    /// Connects to the active watch, adopting a state-restored peripheral when
-    /// it matches. On bleQueue.
-    private func connectActiveLocked() {
-        guard central.state == .poweredOn,
-              let activeID = WatchRegistry.activeWatchIDSync() else { return }
-        let connection = ensureConnection(for: activeID)
-        guard connection.attachedPeripheral == nil else { return }
-        var candidate: CBPeripheral?
-        if let restored = restoredPeripheral, restored.identifier == activeID {
-            candidate = restored
+    private func connectAllLocked() {
+        for id in FleetConnectPolicy.watchesToConnect(roster: WatchRegistry.knownWatchesSync()) {
+            connectLocked(id: id)
         }
-        restoredPeripheral = nil
+    }
+
+    /// Connects one watch, adopting a state-restored peripheral when it
+    /// matches. No-op if it is parked, already attached, or the user
+    /// transiently disconnected it. On bleQueue.
+    private func connectLocked(id: UUID) {
+        guard central.state == .poweredOn,
+              FleetConnectPolicy.shouldStayConnected(id, roster: WatchRegistry.knownWatchesSync())
+        else { return }
+        let connection = ensureConnection(for: id)
+        guard connection.userWantsConnection, connection.attachedPeripheral == nil else { return }
+        var candidate = restoredPeripherals.removeValue(forKey: id)
         if candidate == nil {
-            candidate = central.retrievePeripherals(withIdentifiers: [activeID]).first
+            candidate = central.retrievePeripherals(withIdentifiers: [id]).first
         }
         guard let peripheral = candidate else { return }
-        connection.userWantsConnection = true
         connection.attach(peripheral)
         if peripheral.state == .connected {
             // Restored while already connected — just resume discovery.
-            addLog("Adopting restored connection to \(peripheral.name ?? "watch")", watchID: activeID)
+            addLog("Adopting restored connection to \(peripheral.name ?? "watch")", watchID: id)
             connection.setInitializing()
             peripheral.discoverServices(nil)
         } else {
@@ -333,6 +388,9 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
+    /// Transiently disconnects the active watch (the manage-sheet "Disconnect"
+    /// action): it stays parked for this session but reconnects on the next
+    /// launch. Use `setKeepConnected(false,…)` for a sticky park.
     func disconnect() {
         bleQueue.async {
             guard let connection = self.connection(for: WatchRegistry.activeWatchIDSync()) else { return }
@@ -350,18 +408,18 @@ extension WatchFleet: CBCentralManagerDelegate {
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
         case .poweredOn:
-            // Drop restored pending connects to non-active watches — iOS would
-            // keep them alive forever otherwise.
+            // Drop restored pending connects to watches we don't want connected
+            // (forgotten or parked) — iOS would keep them alive forever.
             for stray in strayRestoredPeripherals {
-                addLog("Cancelling restored connection to non-active \(stray.name ?? "watch")")
+                addLog("Cancelling restored connection to \(stray.name ?? "watch")")
                 central.cancelPeripheralConnection(stray)
             }
             strayRestoredPeripherals = []
             if idleState == .bluetoothOff {
                 DispatchQueue.main.async { self.idleState = .disconnected }
             }
-            if hasKnownWatches || restoredPeripheral != nil {
-                connectActiveLocked()
+            if hasKnownWatches || !restoredPeripherals.isEmpty {
+                connectAllLocked()
             } else {
                 // First launch: go straight to scanning instead of showing an
                 // idle scan screen.
@@ -427,7 +485,12 @@ extension WatchFleet: CBCentralManagerDelegate {
             return
         }
         addLog("Disconnected\(error.map { ": \($0.localizedDescription)" } ?? "")", watchID: connection.watchID)
-        let shouldReconnect = connection.resetForDisconnect()
+        // Reconnect only if the user still wants this watch connected AND it is
+        // not parked/forgotten.
+        let shouldReconnect = connection.userWantsConnection
+            && FleetConnectPolicy.shouldStayConnected(connection.watchID,
+                                                      roster: WatchRegistry.knownWatchesSync())
+        connection.resetForDisconnect(reconnecting: shouldReconnect)
         if shouldReconnect {
             // Re-issue the connect: iOS keeps it pending until the watch is
             // back in range, surviving app suspension via state restoration.
@@ -442,13 +505,14 @@ extension WatchFleet: CBCentralManagerDelegate {
 
     func centralManager(_ central: CBCentralManager, willRestoreState dict: [String: Any]) {
         guard let peripherals = dict[CBCentralManagerRestoredStatePeripheralsKey] as? [CBPeripheral] else { return }
-        let activeID = WatchRegistry.activeWatchIDSync()
+        let roster = WatchRegistry.knownWatchesSync()
         for restored in peripherals {
-            if restored.identifier == activeID {
-                addLog("State restoration returned \(restored.name ?? "watch") (\(restored.state == .connected ? "connected" : "not connected"))")
-                restoredPeripheral = restored
+            if FleetConnectPolicy.shouldAdoptRestored(restored.identifier, roster: roster) {
+                addLog("State restoration returned \(restored.name ?? "watch") (\(restored.state == .connected ? "connected" : "not connected"))",
+                       watchID: restored.identifier)
+                restoredPeripherals[restored.identifier] = restored
                 restored.delegate = ensureConnection(for: restored.identifier)
-                // Adopted in connectActiveLocked() once the central is poweredOn.
+                // Adopted in connectAllLocked() once the central is poweredOn.
             } else {
                 strayRestoredPeripherals.append(restored)
             }

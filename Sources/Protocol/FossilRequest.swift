@@ -20,6 +20,12 @@ class FossilRequest {
     /// Characteristic the start sequence is written to.
     var startUUID: CBUUID { FossilUUID.char0003 }
     var isFinished = false
+    /// A large multi-packet file transfer (put/get/firmware). The fleet
+    /// serializes these across all watches so two watches streaming a file at
+    /// once don't starve each other's radio and trip the idle watchdog — the
+    /// failure mode a mis-timed encrypted config put most fears. Small control
+    /// exchanges (lookup, delete, config item writes) leave this false.
+    var isBulkTransfer: Bool { false }
     /// Watchdog: the request fails after this much *silence* (no response
     /// from the watch, no outgoing packet). Any activity resets the timer.
     var idleTimeout: TimeInterval { 12 }

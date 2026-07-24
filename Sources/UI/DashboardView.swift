@@ -324,6 +324,9 @@ struct DashboardView: View {
         }
         let f = RelativeDateTimeFormatter()
         f.unitsStyle = .short
+        if (last.timeIntervalSinceNow.isZero) {
+            return String(localized: "Synced now")
+        }
         return String(localized: "Synced \(f.localizedString(for: last, relativeTo: Date()))")
     }
 

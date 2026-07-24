@@ -35,7 +35,7 @@ struct HybridgeApp: App {
                         BackgroundRefresher.shared.scheduleNext()
                     }
                     if phase == .active {
-                        Task { await QuietHoursManager.shared.evaluate() }
+                        Task { await QuietHoursManager.shared.evaluateAll() }
                     }
                 }
         }

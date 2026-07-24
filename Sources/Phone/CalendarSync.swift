@@ -87,7 +87,9 @@ final class CalendarSync: NSObject, ObservableObject {
     }
 
     private func sync() async {
-        guard let token = WatchManager.shared.connectionTokenSync(),
+        // Prefer the held session token so a *non-active* watch's init syncs
+        // its own calendar, not the active watch's.
+        guard let token = WatchSession.connectionToken ?? WatchManager.shared.connectionTokenSync(),
               WatchManager.shared.validatesConnectionToken(token) else { return }
         let events = fetchUpcomingEvents()
         let hash = Self.dedupeKey(for: events)

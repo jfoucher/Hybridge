@@ -9,6 +9,34 @@ private struct QueueTransfer<Value>: @unchecked Sendable {
     let value: Value
 }
 
+/// A minimal FIFO async mutex used to serialize a short cross-watch critical
+/// section (the activity-sync → step-baseline pair) across the whole fleet.
+actor FleetSerialGate {
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    private func acquire() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    private func release() {
+        if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+    }
+
+    func run<T>(_ body: () async throws -> T) async rethrows -> T {
+        await acquire()
+        do {
+            let result = try await body()
+            release()
+            return result
+        } catch {
+            release()
+            throw error
+        }
+    }
+}
+
 /// One watch's live BLE session: its peripheral, characteristics, connection
 /// token, the serialized request queue and all the per-watch published state.
 /// Owns the `CBPeripheralDelegate` for its own peripheral; the CoreBluetooth
@@ -20,6 +48,13 @@ private struct QueueTransfer<Value>: @unchecked Sendable {
 /// conformance documents that queue-isolation boundary for DispatchQueue's
 /// @Sendable closures.
 final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
+    /// Serializes the activity-sync → step-baseline pair across the whole
+    /// fleet, so a watch computes the combined day total only after every
+    /// earlier watch's merge has landed (otherwise concurrent inits push a
+    /// stale baseline into a watch's step register). See
+    /// `syncActivityThenPushBaseline()`.
+    static let stepBaselineGate = FleetSerialGate()
+
     /// Stable identity — the peripheral UUID — known before a token exists.
     let watchID: UUID
     /// The fleet that owns the central and created this connection. `unowned`
@@ -108,9 +143,11 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
     /// the watch repeats the frame, GB dedups the same way.
     private var lastButtonFrameIndex = -1
 
-    /// True while the user wants a connection maintained (auto-reconnect).
-    /// Read by the fleet's disconnect handler to decide whether to re-arm.
-    var userWantsConnection = false
+    /// Transient (session-only) intent to keep this watch connected. Defaults
+    /// to true so a freshly-created connection is picked up by the fleet;
+    /// cleared by a manual `disconnect()` (reset on next launch). The sticky,
+    /// persisted preference is `KnownWatch.keepConnected`.
+    var userWantsConnection = true
 
     /// BLE-queue trust mirrors used for watch-originated phone actions.
     private var sessionReady = false
@@ -244,11 +281,11 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
         }
     }
 
-    /// The link dropped. Clears all per-connection state and returns whether
-    /// the fleet should re-arm the pending connect (the user still wants it).
-    func resetForDisconnect() -> Bool {
+    /// The link dropped. Clears all per-connection state. `reconnecting` (the
+    /// fleet's policy decision) chooses the published state — `.connecting`
+    /// while a pending re-connect is armed, else `.disconnected`.
+    func resetForDisconnect(reconnecting: Bool) {
         failCurrentRequest(FossilError.notConnected)
-        let shouldReconnect = userWantsConnection
         invalidateConnectionToken()
         peripheral = nil
         characteristics = [:]
@@ -256,13 +293,12 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
         sessionStarted = false
         initDispatched = false
         DispatchQueue.main.async {
-            self.connectionState = shouldReconnect ? .connecting : .disconnected
+            self.connectionState = reconnecting ? .connecting : .disconnected
             self.isAuthenticated = false
             self.batteryLevel = nil
             self.batteryObservationDate = nil
             self.installedApps = []
         }
-        return shouldReconnect
     }
 
     /// Tears the session down (a switch or forget). Clears every
@@ -363,6 +399,23 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
         }
         let transferredRequest = QueueTransfer(value: request)
         let expectedToken = WatchSession.connectionToken
+        // Serialize a large file transfer against every other watch's file
+        // transfers (radio fairness). Acquired *after* this watch's session, so
+        // the lock order is always session → bulk gate and cannot cycle. Small
+        // control requests skip the gate and stay concurrent across watches.
+        if request.isBulkTransfer {
+            try await fleet.bulkTransferGate.run {
+                try await self.runSerialized(transferredRequest, expectedToken: expectedToken)
+            }
+        } else {
+            try await runSerialized(transferredRequest, expectedToken: expectedToken)
+        }
+    }
+
+    /// The queued single-request state machine. On the caller's task; hops to
+    /// `bleQueue` to touch CoreBluetooth state.
+    private func runSerialized(_ transferredRequest: QueueTransfer<FossilRequest>,
+                               expectedToken: WatchConnectionToken?) async throws {
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             bleQueue.async {
                 let request = transferredRequest.value
@@ -572,7 +625,6 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
         return WatchActionAuthorization.allows(
             token: token,
             attachedPeripheralID: peripheral?.identifier,
-            activeWatchID: WatchRegistry.activeWatchIDSync(),
             trusted: trusted,
             sessionReady: sessionReady,
             sessionAuthenticated: sessionAuthenticated,

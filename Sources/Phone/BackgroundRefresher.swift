@@ -107,8 +107,12 @@ final class BackgroundRefresher: @unchecked Sendable {
         guard !Task.isCancelled,
               WatchRegistry.activeWatchIDSync() == watchID else { return false }
 
-        await watch.periodicMaintenance()
-        await watch.syncActivityIfDue()
+        // Maintain the whole fleet, not just the active watch — each watch's
+        // per-watch on-device state (time, battery, quiet-hours filter, due
+        // activity sync) must stay fresh. Runs under the shared background
+        // budget; the radio gate serializes the file transfers.
+        await watch.fleet.runPeriodicMaintenance()
+        await watch.fleet.syncActivityIfDueAll()
         await exportToHealthIfEnabled()
 
         return await !currentlyDue()

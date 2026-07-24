@@ -70,7 +70,6 @@ final class WatchActionAuthorizationTests: XCTestCase {
     private func allows(kind: WatchKind = .hybridHR,
                         token: WatchConnectionToken? = nil,
                         attachedPeripheralID: UUID? = nil,
-                        activeWatchID: UUID? = nil,
                         trusted: Bool = true,
                         ready: Bool = true,
                         authenticated: Bool = true) -> Bool {
@@ -80,7 +79,6 @@ final class WatchActionAuthorizationTests: XCTestCase {
         return WatchActionAuthorization.allows(
             token: resolvedToken,
             attachedPeripheralID: attachedPeripheralID ?? peripheralID,
-            activeWatchID: activeWatchID ?? watchID,
             trusted: trusted,
             sessionReady: ready,
             sessionAuthenticated: authenticated,
@@ -90,14 +88,25 @@ final class WatchActionAuthorizationTests: XCTestCase {
     func testOnlyTrustedReadyAuthenticatedHRSessionIsAuthorized() {
         XCTAssertTrue(allows())
         XCTAssertFalse(WatchActionAuthorization.allows(
-            token: nil, attachedPeripheralID: nil, activeWatchID: nil,
+            token: nil, attachedPeripheralID: nil,
             trusted: false, sessionReady: false,
             sessionAuthenticated: false, connectedKind: .unknown))
         XCTAssertFalse(allows(attachedPeripheralID: UUID()))
-        XCTAssertFalse(allows(activeWatchID: UUID()))
         XCTAssertFalse(allows(trusted: false))
         XCTAssertFalse(allows(ready: false))
         XCTAssertFalse(allows(authenticated: false))
+    }
+
+    /// A non-active but enrolled/trusted/live watch is now authorized — the
+    /// active-watch clause was dropped for multi-watch. Identity is still
+    /// pinned to the exact token + peripheral + family.
+    func testNonActiveButLiveTrustedWatchIsAuthorized() {
+        // A different peripheral than the token's still fails (identity pin).
+        XCTAssertFalse(allows(attachedPeripheralID: UUID()))
+        // But nothing about "which watch is active" is consulted anymore:
+        // the same call is authorized regardless.
+        XCTAssertTrue(allows())
+        XCTAssertTrue(allows(kind: .fossilQ, authenticated: false))
     }
 
     func testStaleFamilyAndUnsupportedSessionsFailClosed() {

@@ -51,7 +51,13 @@ final class BatteryWatcher: @unchecked Sendable {
 
     /// Call with every fresh battery reading of the active watch.
     func check(level: Int) {
-        let watchID = WatchRegistry.activeWatchIDSync()
+        checkAndNotify(level: level, watchID: WatchRegistry.activeWatchIDSync())
+    }
+
+    /// Call with a fresh battery reading of a specific watch — the reading watch
+    /// may not be the active one in a multi-watch fleet, and the warned flag is
+    /// per watch.
+    func checkAndNotify(level: Int, watchID: UUID?) {
         guard check(level: level, watchID: watchID) else { return }
         let watch = WatchRegistry.knownWatchesSync().first { $0.id == watchID }
         postNotification(level: level, watchID: watchID,
