@@ -214,7 +214,10 @@ final class QuietHoursCalendarTests: XCTestCase {
     }
 
     func testNextBoundaryPicksEarlierScheduleBoundary() {
-        let now = Date()
+        // Align to a whole minute: the schedule boundary snaps to whole minutes
+        // (start/endMinutes), so a sub-minute `now` would leave the assertion
+        // short by the seconds component.
+        let now = minuteAligned(Date())
         manager.schedule = scheduleStarting(in: 30, endingIn: 90, from: now)
         manager.calendarQuietEnabled = true
         busyProvider.intervals = [BusyInterval(start: now.addingTimeInterval(-60), end: now.addingTimeInterval(3600))]
@@ -226,6 +229,12 @@ final class QuietHoursCalendarTests: XCTestCase {
     /// Builds a schedule using `Calendar.current` minute offsets from `now` —
     /// matching `QuietHours`' own default calendar, so the test is stable
     /// regardless of the machine's timezone.
+    /// Truncates `date` to the start of its minute in `Calendar.current`.
+    private func minuteAligned(_ date: Date) -> Date {
+        let cal = Calendar.current
+        return cal.date(from: cal.dateComponents([.year, .month, .day, .hour, .minute], from: date)) ?? date
+    }
+
     private func scheduleStarting(in startOffsetMinutes: Int, endingIn endOffsetMinutes: Int, from now: Date) -> QuietSchedule {
         let cal = Calendar.current
         let comps = cal.dateComponents([.hour, .minute], from: now)
