@@ -109,6 +109,12 @@ final class WatchManager: ObservableObject, @unchecked Sendable {
     @Published var watchStepCount: Int?
     @Published var activeWatchfaceName: String?
     @Published var activeWatchfaceImage: UIImage?
+    /// Watch id the mirrored `activeWatchfaceImage`/`activeWatchfaceName`
+    /// belong to. This trails `WatchRegistry.activeWatchID` during a switch
+    /// (the registry flips first, the connection mirror rebinds a runloop turn
+    /// later), so the carousel gates the live face on this id to avoid showing
+    /// one watch's downloaded face on another watch's card mid-switch.
+    @Published var activeConnectionWatchID: UUID?
 
     // Mirrors of fleet-level state.
     @Published var discovered: [DiscoveredWatch] = []
@@ -158,31 +164,41 @@ final class WatchManager: ObservableObject, @unchecked Sendable {
             watchStepCount = nil
             activeWatchfaceName = nil
             activeWatchfaceImage = nil
+            activeConnectionWatchID = nil
             return
         }
-        func bind<T>(_ publisher: Published<T>.Publisher,
+        // Which watch the mirrored face now belongs to. Set synchronously (not
+        // via a sink) so it is already correct when the carousel re-renders.
+        activeConnectionWatchID = connection.watchID
+        // `current` seeds the mirror synchronously: `.receive(on:)` defers even
+        // the initial @Published emission to the next main-runloop turn, so
+        // without this seed every mirror keeps the previous watch's value for a
+        // frame after a switch (most visibly a flash of the old face).
+        func bind<T>(_ current: T,
+                     _ publisher: Published<T>.Publisher,
                      _ keyPath: ReferenceWritableKeyPath<WatchManager, T>) {
+            self[keyPath: keyPath] = current
             publisher.receive(on: RunLoop.main)
                 .sink { [weak self] value in self?[keyPath: keyPath] = value }
                 .store(in: &activeCancellables)
         }
-        bind(connection.$connectionState, \.connectionState)
-        bind(connection.$connectionObservationDate, \.connectionObservationDate)
-        bind(connection.$batteryLevel, \.batteryLevel)
-        bind(connection.$batteryObservationDate, \.batteryObservationDate)
-        bind(connection.$firmwareVersion, \.firmwareVersion)
-        bind(connection.$modelNumber, \.modelNumber)
-        bind(connection.$watchKind, \.watchKind)
-        bind(connection.$installedApps, \.installedApps)
-        bind(connection.$isAuthenticated, \.isAuthenticated)
-        bind(connection.$isDevicePaired, \.isDevicePaired)
-        bind(connection.$awaitingAdoptionConfirm, \.awaitingAdoptionConfirm)
-        bind(connection.$uploadProgress, \.uploadProgress)
-        bind(connection.$liveHeartRate, \.liveHeartRate)
-        bind(connection.$liveHeartRateActive, \.liveHeartRateActive)
-        bind(connection.$watchStepCount, \.watchStepCount)
-        bind(connection.$activeWatchfaceName, \.activeWatchfaceName)
-        bind(connection.$activeWatchfaceImage, \.activeWatchfaceImage)
+        bind(connection.connectionState, connection.$connectionState, \.connectionState)
+        bind(connection.connectionObservationDate, connection.$connectionObservationDate, \.connectionObservationDate)
+        bind(connection.batteryLevel, connection.$batteryLevel, \.batteryLevel)
+        bind(connection.batteryObservationDate, connection.$batteryObservationDate, \.batteryObservationDate)
+        bind(connection.firmwareVersion, connection.$firmwareVersion, \.firmwareVersion)
+        bind(connection.modelNumber, connection.$modelNumber, \.modelNumber)
+        bind(connection.watchKind, connection.$watchKind, \.watchKind)
+        bind(connection.installedApps, connection.$installedApps, \.installedApps)
+        bind(connection.isAuthenticated, connection.$isAuthenticated, \.isAuthenticated)
+        bind(connection.isDevicePaired, connection.$isDevicePaired, \.isDevicePaired)
+        bind(connection.awaitingAdoptionConfirm, connection.$awaitingAdoptionConfirm, \.awaitingAdoptionConfirm)
+        bind(connection.uploadProgress, connection.$uploadProgress, \.uploadProgress)
+        bind(connection.liveHeartRate, connection.$liveHeartRate, \.liveHeartRate)
+        bind(connection.liveHeartRateActive, connection.$liveHeartRateActive, \.liveHeartRateActive)
+        bind(connection.watchStepCount, connection.$watchStepCount, \.watchStepCount)
+        bind(connection.activeWatchfaceName, connection.$activeWatchfaceName, \.activeWatchfaceName)
+        bind(connection.activeWatchfaceImage, connection.$activeWatchfaceImage, \.activeWatchfaceImage)
     }
 
     // MARK: - Constants (re-exported for callers that used WatchManager.X)
@@ -381,5 +397,21 @@ final class WatchManager: ObservableObject, @unchecked Sendable {
     /// face's local artwork matched by the persisted active-face name.
     var activeWatchfacePreviewImage: UIImage? {
         activeWatchfaceImage ?? BundledFaces.matching(name: activeWatchfaceName)?.thumbnail
+    }
+
+    /// Preview face for a *specific* roster watch, resolved synchronously from
+    /// that watch's own identity so the dashboard carousel never paints one
+    /// watch's face onto another card. The live downloaded face is only used
+    /// for the watch that actually produced it (`activeConnectionWatchID`);
+    /// every other card — and the just-selected watch until its connection
+    /// mirror catches up — falls back to the bundled artwork matched by that
+    /// watch's own persisted active-face name.
+    func watchfacePreviewImage(for watchID: UUID) -> UIImage? {
+        if watchID == activeConnectionWatchID, let live = activeWatchfaceImage {
+            return live
+        }
+        let name = UserDefaults.standard.string(
+            forKey: WatchScoped.key(.activeWatchfaceName, watchID: watchID))
+        return BundledFaces.matching(name: name)?.thumbnail
     }
 }

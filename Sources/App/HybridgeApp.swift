@@ -36,6 +36,13 @@ struct HybridgeApp: App {
                     }
                     if phase == .active {
                         Task { await QuietHoursManager.shared.evaluateAll() }
+                        // A background launch while the device was locked leaves
+                        // FitnessStore with writes blocked (the protected archive
+                        // couldn't be read). The unlock notification that clears
+                        // it is missed once iOS suspends the app, so re-attempt
+                        // the load on every foreground — otherwise sync silently
+                        // no-ops and "Synced … ago" freezes. No-op when not blocked.
+                        Task { await FitnessStore.shared.retryLoadIfBlocked() }
                     }
                 }
         }

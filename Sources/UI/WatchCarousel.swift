@@ -48,7 +48,7 @@ struct WatchCarousel: View {
                         let isActive = known.id == registry.activeWatchID
                         WatchCard(known: known,
                                   isActive: isActive,
-                                  face: isActive ? watch.activeWatchfacePreviewImage : nil,
+                                  face: watch.watchfacePreviewImage(for: known.id),
                                   skin: isActive ? WatchSkinStore.shared : pinnedSkinStore(for: known.id))
                             .containerRelativeFrame(.horizontal)
                             .id(CarouselItem.watch(known.id))
@@ -157,11 +157,14 @@ struct WatchCarousel: View {
 }
 
 /// One carousel card: always the real hero render (user skin or the default
-/// drawn mock) — only the dial face differs, since a live face is only
-/// cached for the currently-connected watch. Peeked (non-active) cards
-/// previously got a dimmed, scaled-down generic mock instead, but that
-/// flickered in as soon as a card was no longer the active one, including
-/// mid-swipe — showing the same real rendering for every card avoids that.
+/// drawn mock) with that watch's own dial face — the live downloaded face for
+/// the connected watch, the bundled artwork for every other card (see
+/// `WatchManager.watchfacePreviewImage(for:)`, which keys the face to the
+/// watch id so a switch never flashes the previous watch's face). Peeked
+/// (non-active) cards previously got a dimmed, scaled-down generic mock
+/// instead, but that flickered in as soon as a card was no longer the active
+/// one, including mid-swipe — showing the same real rendering for every card
+/// avoids that.
 private struct WatchCard: View {
     let known: KnownWatch
     let isActive: Bool
@@ -171,12 +174,6 @@ private struct WatchCard: View {
     var body: some View {
         VStack(spacing: 8) {
             WatchHeroImage(face: face, skin: skin)
-            if !isActive {
-                Text(known.name)
-                    .font(Theme.sans(14, weight: .medium, relativeTo: .subheadline))
-                    .foregroundStyle(Theme.sub)
-                    .lineLimit(1)
-            }
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)

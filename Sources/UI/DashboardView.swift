@@ -211,12 +211,35 @@ struct DashboardView: View {
     /// activity file, installed apps + watchface preview) rather than
     /// waiting on the periodic-maintenance throttle.
     private func refreshFromWatch() async {
-        guard watch.connectionState == .ready else { return }
-        do {
+        guard watch.connectionState != .bluetoothOff else {
+            ToastCenter.shared.error(String(localized: "Turn on Bluetooth to sync"))
+            return
+        }
+        // Run the refresh in an *unstructured* Task and await its value. The
+        // refresh emits @Published updates (battery/steps/apps) that re-render
+        // this view, and SwiftUI reacts by cancelling the `.refreshable`
+        // gesture task mid-flight. When the sync ran directly in that task,
+        // `Task.checkCancellation()` tripped right before the FitnessStore
+        // merge — so the file downloaded but "Synced …" never advanced. An
+        // unstructured Task doesn't inherit that cancellation, so the merge
+        // (and the on-watch file delete) complete; awaiting `.value` keeps the
+        // pull-to-refresh spinner up until the real work is done.
+        let work = Task {
+            // Fossil hybrids drop BLE when idle, so a pull often lands while
+            // the watch is reconnecting — wait it out, as the sync intent does.
+            guard await watch.waitUntilReady(timeout: 20) else {
+                await MainActor.run {
+                    ToastCenter.shared.error(
+                        String(localized: "Couldn't reach the watch — make sure it's nearby"))
+                }
+                return
+            }
             try await watch.forceFullRefresh()
+        }
+        do {
+            try await work.value
         } catch is CancellationError {
-            // SwiftUI cancels the `.refreshable` task if the user retriggers
-            // the pull or leaves the screen mid-refresh — not a real failure.
+            // forceFullRefresh itself observed a real teardown — not a failure.
         } catch {
             await MainActor.run { ToastCenter.shared.error(error.localizedDescription) }
         }
@@ -322,11 +345,15 @@ struct DashboardView: View {
         guard let last = fitness.lastSync(for: registry.activeWatchID) else {
             return String(localized: "Not synced yet")
         }
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        if (last.timeIntervalSinceNow.isZero) {
+        // Within a minute of syncing, say "now" rather than let
+        // RelativeDateTimeFormatter phrase a sub-second interval as the future
+        // ("in 0 seconds") — it rounds the difference to zero and defaults to
+        // future phrasing.
+        if last.timeIntervalSinceNow > -60 {
             return String(localized: "Synced now")
         }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
         return String(localized: "Synced \(f.localizedString(for: last, relativeTo: Date()))")
     }
 
