@@ -5,7 +5,7 @@ import Foundation
 /// from WatchActions.swift, which stays Hybrid-HR-only; shared operations
 /// (setTime, setAlarms, writeConfig, hand calibration…) live there and
 /// branch on the active watch's kind internally.
-extension WatchManager {
+extension WatchConnection {
 
     /// App-level init for a fossil-file-era Q watch.
     /// No authentication anywhere — the protocol is
@@ -13,8 +13,8 @@ extension WatchManager {
     func initializeQWatch() async {
         // Same serialization as initializeWatch — see the note there.
         try? await WatchSession.exclusive(for: connectionTokenSync()) {
-            Self.initInProgress = true
-            defer { Self.initInProgress = false }
+            self.isInitializing = true
+            defer { self.isInitializing = false }
             await initializeQWatchLocked()
         }
     }

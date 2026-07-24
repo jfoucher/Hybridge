@@ -90,6 +90,89 @@ final class WatchSessionTests: XCTestCase {
         XCTAssertFalse(WatchSession.isHeld)
     }
 
+    private actor HoldsProbe {
+        private(set) var snapshot: [String: (a: Bool, b: Bool)] = [:]
+        func record(_ label: String, a: Bool, b: Bool) { snapshot[label] = (a, b) }
+    }
+
+    private func token(_ watchID: UUID) -> WatchConnectionToken {
+        WatchConnectionToken(watchID: watchID, peripheralID: watchID,
+                             generation: 1, kind: .hybridHR)
+    }
+
+    /// Two different watches must run their critical sections concurrently —
+    /// the whole point of the per-watch gate. A single global mutex would
+    /// serialize them and this peak would be 1.
+    func testDifferentWatchesRunConcurrently() async {
+        let a = token(UUID())
+        let b = token(UUID())
+        let overlap = Overlap()
+        await withTaskGroup(of: Void.self) { group in
+            for watchToken in [a, b] {
+                group.addTask {
+                    try? await WatchSession.exclusive(for: watchToken) {
+                        await overlap.enter()
+                        try? await Task.sleep(nanoseconds: 20_000_000)
+                        await overlap.leave()
+                    }
+                }
+            }
+        }
+        let peak = await overlap.maxConcurrent
+        XCTAssertEqual(peak, 2, "distinct watches must not serialize against each other")
+    }
+
+    /// Contention on the *same* watch still serializes.
+    func testSameWatchStillSerializes() async {
+        let a = token(UUID())
+        let overlap = Overlap()
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<10 {
+                group.addTask {
+                    try? await WatchSession.exclusive(for: a) {
+                        await overlap.enter()
+                        try? await Task.sleep(nanoseconds: 1_000_000)
+                        await overlap.leave()
+                    }
+                }
+            }
+        }
+        let peak = await overlap.maxConcurrent
+        let done = await overlap.completed
+        XCTAssertEqual(peak, 1, "same-watch operations overlapped")
+        XCTAssertEqual(done, 10)
+    }
+
+    /// Re-entering the same watch passes through; entering a second watch
+    /// while holding the first acquires both gates (and `holds` reflects it).
+    func testHoldsReflectsSameAndCrossWatchNesting() async throws {
+        let a = token(UUID())
+        let b = token(UUID())
+        // Collected inside the closures and asserted afterwards, so the
+        // XCTAssert autoclosures don't sit inside the exclusive() bodies (which
+        // trips the type-checker's closure inference).
+        let probe = HoldsProbe()
+        try await WatchSession.exclusive(for: a) {
+            await probe.record("a-outer", a: WatchSession.holds(a.watchID), b: WatchSession.holds(b.watchID))
+            try await WatchSession.exclusive(for: a) {
+                await probe.record("a-nested", a: WatchSession.holds(a.watchID), b: WatchSession.holds(b.watchID))
+            }
+            try await WatchSession.exclusive(for: b) {
+                await probe.record("b-inner", a: WatchSession.holds(a.watchID), b: WatchSession.holds(b.watchID))
+            }
+            await probe.record("after-b", a: WatchSession.holds(a.watchID), b: WatchSession.holds(b.watchID))
+        }
+        let snapshot = await probe.snapshot
+        XCTAssertEqual(snapshot["a-outer"]?.a, true)
+        XCTAssertEqual(snapshot["a-outer"]?.b, false)
+        XCTAssertEqual(snapshot["a-nested"]?.a, true, "same-watch nesting stays held")
+        XCTAssertEqual(snapshot["b-inner"]?.a, true, "outer watch still held inside inner")
+        XCTAssertEqual(snapshot["b-inner"]?.b, true, "inner watch acquired")
+        XCTAssertEqual(snapshot["after-b"]?.b, false, "inner watch released after its body")
+        XCTAssertFalse(WatchSession.holds(a.watchID))
+        XCTAssertFalse(WatchSession.isHeld)
+    }
+
     func testCancelledQueuedOperationNeverRuns() async {
         let firstEntered = expectation(description: "first operation owns the gate")
         let first = Task {

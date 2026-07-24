@@ -3,7 +3,7 @@ import CoreBluetooth
 import UIKit
 
 /// High-level watch operations, composed from serialized protocol requests.
-extension WatchManager {
+extension WatchConnection {
     /// Debug file-manager mutation still obeys the same token-bound session
     /// invariant as production operations.
     func deleteFileForDebug(handle: UInt16) async throws {
@@ -11,22 +11,6 @@ extension WatchManager {
             try await self.run(FileDeleteRequest(handle: handle))
         }
     }
-
-    /// Shared with initializeQWatch (QWatchActions.swift): true while either
-    /// family's init sequence is running.
-    ///
-    /// Mutual exclusion is `WatchSession.exclusive`'s job — this is only a
-    /// status flag, so that callers which merely want to *avoid* piling onto
-    /// a running init (`waitUntilIdle`, `periodicMaintenance`) can check
-    /// cheaply without taking the session. It is read from bleQueue, main and
-    /// arbitrary task executors, so it is lock-guarded rather than a bare
-    /// `static var`.
-    static var initInProgress: Bool {
-        get { initFlagLock.withLock { initInProgressStorage } }
-        set { initFlagLock.withLock { initInProgressStorage = newValue } }
-    }
-    private static let initFlagLock = NSLock()
-    nonisolated(unsafe) private static var initInProgressStorage = false
 
     /// The auth key of the active watch — every protocol operation that
     /// needs the key runs against the watch the session belongs to.
@@ -48,8 +32,8 @@ extension WatchManager {
         // check-then-act hole (two inits could both observe the flag clear
         // across the sleep and proceed).
         try? await WatchSession.exclusive(for: connectionTokenSync()) {
-            Self.initInProgress = true
-            defer { Self.initInProgress = false }
+            self.isInitializing = true
+            defer { self.isInitializing = false }
             await initializeWatchLocked()
         }
     }
@@ -1155,7 +1139,7 @@ extension WatchManager {
             self.lastMaintenanceDate = Date()
             return true
         }
-        guard due, !Self.initInProgress else { return }
+        guard due, !isInitializing else { return }
         try? await setTime()
         try? await refreshBattery()
         await QuietHoursManager.shared.evaluate()

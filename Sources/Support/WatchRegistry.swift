@@ -263,8 +263,15 @@ enum WatchScoped {
         key(base.rawValue, watchID: watchID)
     }
 
+    /// Resolves the key for "the watch this code is acting on". Inside a watch
+    /// operation that is the watch whose session is held (`WatchSession`'s
+    /// task-local token), so a background push to a *non-active* watch reads
+    /// and writes that watch's keys rather than the active watch's. Outside any
+    /// operation — main-thread UI reads — it falls back to the active watch,
+    /// which is what the screens want.
     static func key(_ base: WatchScopedKey) -> String {
-        key(base, watchID: WatchRegistry.activeWatchIDSync())
+        let watchID = WatchSession.connectionToken?.watchID ?? WatchRegistry.activeWatchIDSync()
+        return key(base, watchID: watchID)
     }
 
     /// String-based variants, for the migration (which walks `perWatchKeys`

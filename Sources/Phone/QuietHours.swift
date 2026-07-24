@@ -223,15 +223,21 @@ final class QuietHoursManager: @unchecked Sendable {
             WatchManager.shared.addLog("Quiet hours: unavailable for this watch in release builds pending hardware validation")
             return
         }
-        let ready = await MainActor.run { watch.connectionState == .ready }
+        // Evaluate against *this token's* connection, not the active one —
+        // in a multi-watch fleet the quiet-hours evaluate can target a
+        // non-active watch.
+        let connection = WatchFleet.shared.connection(for: token.watchID)
+        let ready = await MainActor.run { connection?.connectionState == .ready }
         // Don't pile onto a running init — unless we *are* the init sequence.
         // Both family inits call this near their tail (so a watch reconnecting
         // at 23:00 goes quiet immediately rather than waiting for the next
-        // maintenance tick), and they hold `initInProgress` for their whole
+        // maintenance tick), and they hold this watch's session for their whole
         // duration, so a bare check made that call a silent no-op. Holding the
         // session is exactly the "it is safe for us to talk to the watch"
         // condition the flag was standing in for.
-        guard ready, !WatchManager.initInProgress || WatchSession.isHeld else { return }
+        guard ready,
+              !(connection?.isInitializing ?? false) || WatchSession.holds(token.watchID)
+        else { return }
         do {
             try await WatchSession.exclusive(for: token) {
                 guard watch.validatesConnectionToken(token) else {
