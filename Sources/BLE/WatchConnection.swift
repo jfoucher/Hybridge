@@ -261,7 +261,28 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
 
     func setConnecting() { DispatchQueue.main.async { self.connectionState = .connecting } }
     func setInitializing() { DispatchQueue.main.async { self.connectionState = .initializing } }
-    func setBluetoothOff() { DispatchQueue.main.async { self.connectionState = .bluetoothOff } }
+
+    /// Bluetooth was turned off: clear the peripheral/session state (the
+    /// peripheral iOS handed us is now invalid) but keep `userWantsConnection`
+    /// so the fleet reconnects on power-on. Without clearing `peripheral`,
+    /// `connectLocked`'s `attachedPeripheral == nil` guard would skip this
+    /// watch forever after a Bluetooth off/on cycle. On bleQueue.
+    func resetForBluetoothOff() {
+        failCurrentRequest(FossilError.notConnected)
+        invalidateConnectionToken()
+        peripheral = nil
+        characteristics = [:]
+        pendingNotifyChars = []
+        sessionStarted = false
+        initDispatched = false
+        DispatchQueue.main.async {
+            self.connectionState = .bluetoothOff
+            self.isAuthenticated = false
+            self.batteryLevel = nil
+            self.batteryObservationDate = nil
+            self.installedApps = []
+        }
+    }
 
     /// A fresh connection succeeded — begin service discovery.
     func handleConnected() {

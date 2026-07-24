@@ -427,7 +427,9 @@ extension WatchFleet: CBCentralManagerDelegate {
             }
         case .poweredOff, .unauthorized, .unsupported:
             DispatchQueue.main.async { self.idleState = .bluetoothOff }
-            for connection in allConnections() { connection.setBluetoothOff() }
+            // Clear each connection's now-invalid peripheral so power-on can
+            // reconnect it (the peripheral iOS gave us dies with the radio).
+            for connection in allConnections() { connection.resetForBluetoothOff() }
         default:
             break
         }
