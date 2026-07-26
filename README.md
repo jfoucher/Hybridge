@@ -75,6 +75,9 @@ Try it here: https://testflight.apple.com/join/mcjp5hzy
   even with the app not running (the intents wait out the same
   reconnect-and-init chain a background refresh does)
 
+- 26 new and custom watchfaces:
+  ![Gallery](gallery.png)
+
 Notifications (SMS etc.) are delivered by iOS itself via ANCS once the watch
 is bonded to the iPhone - the app manages the on-watch notification config
 (which apps, with which icons), not the delivery.
