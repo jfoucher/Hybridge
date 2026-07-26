@@ -5,6 +5,33 @@ import UIKit
 // Every tab screen composes these so the identity stays consistent and the
 // tokens live in exactly one place (Theme).
 
+// MARK: - Container width
+
+/// Reads the *current* width of the space it is offered and hands it to its
+/// content.
+///
+/// This exists because `containerRelativeFrame(.horizontal)` — the declarative
+/// way to pin scroll content to its container's width — resolves the container
+/// size once and does not re-resolve it on an interface-orientation change: a
+/// screen rotated while it was on screen kept the previous orientation's width
+/// (a narrow column in landscape, a column overflowing both edges back in
+/// portrait) until some unrelated change forced a fresh layout pass. A
+/// `GeometryReader` is re-read on every layout pass, so the width follows the
+/// rotation.
+///
+/// It is as greedy as `GeometryReader` (fills the space offered, content
+/// anchored top-leading), so only wrap things that already fill their
+/// container — a `ScrollView`, or a fixed-height row.
+struct ContainerWidthReader<Content: View>: View {
+    @ViewBuilder var content: (CGFloat) -> Content
+
+    var body: some View {
+        GeometryReader { proxy in
+            content(proxy.size.width)
+        }
+    }
+}
+
 // MARK: - Screen scaffold
 
 /// Standard themed screen: warm background, a scrolling column with the big
@@ -36,37 +63,41 @@ struct ThemedScreen<Content: View>: View {
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea()
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(alignment: dynamicTypeSize.isAccessibilitySize ? .top : .center) {
-                        Text(title)
-                            .font(dynamicTypeSize.isAccessibilitySize
-                                  ? Theme.serif(25, relativeTo: .title3)
-                                  : Theme.serif(40))
-                            .tracking(0.3)
-                            .foregroundStyle(Theme.ink)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: 0)
-                        if let action {
-                            CircleActionButton(symbol: action.symbol, run: action.run)
+            // Pins the column to the scroll view's own width instead of
+            // merely centering it. `frame(maxWidth: .infinity)` grows to
+            // fit an oversized child, and a content column even a fraction
+            // of a point wider than the viewport turns this vertical
+            // ScrollView into a freely two-dimensional one — the whole
+            // screen then drags sideways from anywhere. Sub-pixel rounding
+            // inside a card is enough to trip it. Measured rather than
+            // declared via `containerRelativeFrame` so it survives rotation
+            // (see ContainerWidthReader).
+            ContainerWidthReader { width in
+                ScrollView(showsIndicators: false) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        HStack(alignment: dynamicTypeSize.isAccessibilitySize ? .top : .center) {
+                            Text(title)
+                                .font(dynamicTypeSize.isAccessibilitySize
+                                      ? Theme.serif(25, relativeTo: .title3)
+                                      : Theme.serif(40))
+                                .tracking(0.3)
+                                .foregroundStyle(Theme.ink)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: 0)
+                            if let action {
+                                CircleActionButton(symbol: action.symbol, run: action.run)
+                            }
                         }
-                    }
-                    .padding(.top, 6)
-                    .padding(.bottom, 12)
+                        .padding(.top, 6)
+                        .padding(.bottom, 12)
 
-                    content()
+                        content()
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 32 + tabBarHeight)
+                    .frame(maxWidth: 760)
+                    .frame(width: width)
                 }
-                .padding(.horizontal, 22)
-                .padding(.bottom, 32 + tabBarHeight)
-                .frame(maxWidth: 760)
-                // Pins the column to the scroll view's own width instead of
-                // merely centering it. `frame(maxWidth: .infinity)` grows to
-                // fit an oversized child, and a content column even a fraction
-                // of a point wider than the viewport turns this vertical
-                // ScrollView into a freely two-dimensional one — the whole
-                // screen then drags sideways from anywhere. Sub-pixel rounding
-                // inside a card is enough to trip it.
-                .containerRelativeFrame(.horizontal)
             }
         }
     }

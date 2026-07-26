@@ -42,28 +42,36 @@ struct WatchCarousel: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: cardSpacing) {
-                    ForEach(registry.watches) { known in
-                        let isActive = known.id == registry.activeWatchID
-                        WatchCard(known: known,
-                                  isActive: isActive,
-                                  face: watch.watchfacePreviewImage(for: known.id),
-                                  skin: isActive ? WatchSkinStore.shared : pinnedSkinStore(for: known.id))
-                            .containerRelativeFrame(.horizontal)
-                            .id(CarouselItem.watch(known.id))
-                            .onTapGesture { handleTap(on: known) }
+            // One card per page: the width the cards are given is the scroll
+            // view's own width less the two content margins, which is exactly
+            // what `containerRelativeFrame(.horizontal)` used to resolve to —
+            // measured instead, because that modifier keeps the width it first
+            // resolved across a device rotation (see ContainerWidthReader).
+            ContainerWidthReader { width in
+                let cardWidth = max(0, width - peekInset * 2)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: cardSpacing) {
+                        ForEach(registry.watches) { known in
+                            let isActive = known.id == registry.activeWatchID
+                            WatchCard(known: known,
+                                      isActive: isActive,
+                                      face: watch.watchfacePreviewImage(for: known.id),
+                                      skin: isActive ? WatchSkinStore.shared : pinnedSkinStore(for: known.id))
+                                .frame(width: cardWidth)
+                                .id(CarouselItem.watch(known.id))
+                                .onTapGesture { handleTap(on: known) }
+                        }
+                        AddWatchCard()
+                            .frame(width: cardWidth)
+                            .id(CarouselItem.add)
+                            .onTapGesture { showAddSheet = true }
                     }
-                    AddWatchCard()
-                        .containerRelativeFrame(.horizontal)
-                        .id(CarouselItem.add)
-                        .onTapGesture { showAddSheet = true }
+                    .scrollTargetLayout()
                 }
-                .scrollTargetLayout()
+                .scrollTargetBehavior(.viewAligned)
+                .scrollPosition(id: $scrolledItem)
+                .contentMargins(.horizontal, peekInset, for: .scrollContent)
             }
-            .scrollTargetBehavior(.viewAligned)
-            .scrollPosition(id: $scrolledItem)
-            .contentMargins(.horizontal, peekInset, for: .scrollContent)
             .frame(height: cardHeight)
 
             pageDots
