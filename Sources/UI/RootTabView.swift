@@ -126,17 +126,25 @@ struct RootTabView: View {
     }
 
     private var tabBarContainer: some View {
-        // `safeAreaInset` here places the floating bar, but a `NavigationStack`
-        // does not forward an ancestor's bottom inset to its own scrolling
-        // content — so the bar's measured height is also handed to each screen
-        // (via the environment) to reserve as scroll-content bottom padding.
-        // Without this the last rows scroll under the bar (regressed with the
-        // landscape/iPad rework, which swapped a fixed reserve for this inset).
+        // The bar is an `.overlay`, deliberately *not* a `safeAreaInset`: iOS
+        // re-renders a backgrounded app in every supported orientation for the
+        // app-switcher snapshot, and the inset's placement came back from that
+        // pass stale — anchored to the landscape height, i.e. stranded around
+        // mid-screen — until an actual rotation forced a fresh layout. An
+        // overlay resolves its alignment against the container's current
+        // bounds on every pass instead.
+        // Nothing is lost by dropping the inset: a `NavigationStack` never
+        // forwarded an ancestor's bottom inset to its own scrolling content,
+        // so the bar's measured height is handed to each screen (via the
+        // environment) to reserve as scroll-content bottom padding, and every
+        // tab root already does that. Without it the last rows scroll under
+        // the bar (regressed with the landscape/iPad rework, which swapped a
+        // fixed reserve for this measurement).
         selectedScreen
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .environment(\.floatingTabBarHeight, tabBarHeight)
             .background(Theme.bg.ignoresSafeArea())
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            .overlay(alignment: .bottom) {
                 FossilTabBar(tabs: tabs, selection: $selection,
                              compactHeight: verticalSizeClass == .compact)
                     .padding(.bottom, 8)
