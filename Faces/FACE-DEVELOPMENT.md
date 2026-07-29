@@ -305,7 +305,7 @@ existing face and rewrite the parts that differ.
   rectangles + relative `a` arcs (a filled disc is
   `M0,-r a r,r 0 1 0 0,2r a r,r 0 1 0 0,-2r Z`). A needle pivoting at
   the screen centre (120,120) is fine even though the hub hides its
-  inner ~25 px — the tip near the rim reads (radar/compass/vault/orrery
+  inner ~30 px — the tip near the rim reads (radar/compass/vault/orrery
   all pivot at centre). Off-centre sub-dial pivots also work.
 * Keep every value slot (and important art) out of the hub blind spot
   ~x/y 105..135; full-width rules and rings passing under it are fine.
@@ -395,11 +395,18 @@ how `simple/` is regression-tested without a watch:
 ## Misc gotchas
 
 * **Hands-hub blind spot**: the physical hands attach at the screen
-  center — a ~25 px diameter disc around (120,120) is never visible
-  (measured on the watch; the docs long said 20). Keep text/glyphs out
-  of roughly x/y 105..135; ring arcs and decorative lines passing under
-  it are fine. `layout_engine.HUB_R` (12.5) is the one place the
-  renderer and simulate.py's --audit take it from.
+  center — a ~30 px diameter disc around (120,120) is never visible
+  (measured on the watch; the docs long said 20, then 25). Keep
+  text/glyphs out of roughly x/y 105..135; ring arcs and decorative
+  lines passing under it are fine. `layout_engine.HUB_R` (15.0) is the
+  one place the renderer and simulate.py's --audit take it from.
+  Clearing the disc is not the same as reading clearly beside it — the
+  audit's `HUB_R + 2` is a collision margin, and ink that only just
+  passes it still looks swallowed by the hub. Regence's date ring is
+  the worked example: 1 and 31 sat 2.7 px outside the disc as it was
+  then measured, passed the audit, and read as hidden; its opening was
+  widened until they stand 20.8 px out from the centre — 5.8 px clear
+  of the hub at 15.0, and still clear if it is measured larger again.
 
 * `jq -r` leaves a trailing newline in `display_name` — harmless.
 * jerry es5.1: no `Date`, quote reserved words used as keys

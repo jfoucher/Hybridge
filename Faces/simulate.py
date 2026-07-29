@@ -45,9 +45,12 @@ def render(face, scenario='day'):
 W_SLOP = 1.25
 V_SLOP = 6                    # vertical uncertainty vs hub/screen edge
 V_SLOP_TT = 1                 # text-vs-text: vertical metrics are close
-# hub radius: the 12.5 measured on the watch plus a small pad. It used
-# to be 10+4; now that the hub itself is measured the pad only covers
-# how well the layout lands, and V_SLOP already pads the text box.
+# hub radius: the 15.0 measured on the watch plus a small pad. It used
+# to be 10+4, then 12.5+2; now that the hub itself is measured the pad
+# only covers how well the layout lands, and V_SLOP already pads the
+# text box.  Note the pad is the *collision* margin, not a legibility
+# one — ink that merely clears it still reads as hidden against the
+# hub, so artwork that runs close to the centre wants more than this.
 HUB = (120, 120, HUB_R + 2)
 SCREEN_R = 118
 
@@ -134,6 +137,7 @@ def main():
         print(f'{face}: {out}')
 
     if args.sheet:
+        shots.sort(key=lambda shot: shot[0].casefold())
         cols, cell, label_h = 5, 240, 24
         rows = math.ceil(len(shots) / cols)
         sheet = Image.new('RGB', (cols * (cell + 8) + 8,

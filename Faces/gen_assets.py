@@ -661,8 +661,9 @@ def bg_transit():
         d.rounded_rectangle(P(x0, y0, x0 + 56, y0 + 20), radius=5 * SS,
                             outline=BLACK, width=int(1.6 * SS))
         text(d, lx, ly, label, label_font(11), fill=DARK)
-    # interchange ring around the hands hub
-    circle(d, 120, 120, 15, outline=BLACK, w=2.5)
+    # interchange ring around the hands hub: sized off the measurement so
+    # it stays a ring *around* the hub rather than half-buried under it
+    circle(d, 120, 120, layout_engine.HUB_R + 2.5, outline=BLACK, w=2.5)
     return img
 
 
@@ -681,7 +682,9 @@ def bg_calc():
                             radius=4 * SS, outline=BLACK,
                             width=int(1.6 * SS))
         text(d, cx, cy, label, mono_font(13), fill=BLACK)
-    circle(d, 120, 120, 13, fill=DARK)      # OFF button = hands hub
+    # OFF button = hands hub: a hair proud of the measurement, so the
+    # button rim shows round the edge of the hub instead of vanishing under it
+    circle(d, 120, 120, layout_engine.HUB_R + 0.5, fill=DARK)
     return img
 
 
@@ -1618,10 +1621,26 @@ REG_CENTER = (120, 120)
 REG_MONTHS = 'JFMAMJJASOND'
 REG_MON_PIVOT = (43, 34)     # month hand pivot, up at the top-left
 REG_MON_R = 65               # month label radius (about the pivot)
-REG_DOW_CENTER = (184, 122)  # weekday sub-dial centre
-REG_DOW_R = 40               # weekday sub-dial radius
-REG_DATE_CENTER = (120, 182)  # date sub-dial centre (just below half-way)
-REG_DATE_R = 47              # date label radius (about that centre)
+REG_DOW_CENTER = (184, 117)  # weekday sub-dial centre
+REG_DOW_R = 37               # weekday sub-dial radius
+REG_DATE_CENTER = (120, 177)  # date sub-dial centre (just below half-way)
+REG_DATE_R = 52              # date label radius (about that centre)
+# Power reserve: a tall, narrow sector standing up from a pivot low on the
+# left, between 7 and 8 o'clock (watch angle 228, 107px out).  Narrowing
+# the sweep to 45 deg is what buys the height — the gauge is a wedge, and
+# a thin one slots up the corridor between the date ring and the rim where
+# the old 120 deg fan could not go.  Searched against the real ink of the
+# other dials rather than a bounding disc: it clears them by 8px and
+# reaches r=112.6 of the 118 dial.
+REG_PWR_CENTER = (41, 192)   # power-reserve pivot, at the foot of the gauge
+REG_PWR_R = 76               # graduation radius (about that pivot)
+REG_PWR_SPAN = 45            # sector the needle sweeps, centred on local 12
+# E/F rather than 0/100: it is what retro and reptile already label a
+# battery gauge with, it matches this dial's own single-serif-letter
+# language, and at the 14pt floor "100" would not fit inside the scale.
+# Labels sit at R - 19, the same relationship subdial() uses, so the
+# needle sweeps over them at the extremes exactly as it does there.
+REG_PWR_LABEL_R = REG_PWR_R - 19
 # --- Breguet bosom-moon aperture ---------------------------------------
 # The aperture is a half-disc: a straight edge with the two dial lobes
 # sitting on it as semicircular bumps, and a big arc of sky over them.
@@ -1631,12 +1650,25 @@ REG_DATE_R = 47              # date label radius (about that centre)
 # from behind the lobe.  The lobe rim doubles as the terminator: it eats
 # the moon's edge on the way up and again on the way down, which is how
 # these apertures fake the phases.
-REG_MOON_PIVOT = (170, 59)   # disc rotation centre = lobe midpoint
+# Every dimension below is the original design scaled by 1.3, and the
+# pivot moved up-left out of the rim: at this size the complication is
+# ~80px wide and only just fits the pocket between the month fan's outer
+# rail, the weekday sub-dial's top letter and the round mask, so nothing
+# here can grow much without one of those three giving ground.
+REG_MOON_PIVOT = (153, 59)   # disc rotation centre = lobe midpoint
 REG_MOON_TILT = 40           # watch angle (cw) the aperture opens towards
-REG_MOON_HALF = 18           # half the lobe separation = moon orbit radius
-REG_MOON_RM = 12             # moon radius
-REG_MOON_RL = 12.5           # lobe radius; a hair over RM so age 0 is clean
-REG_MOON_RD = 34             # aperture radius
+REG_MOON_HALF = 23.4         # half the lobe separation = moon orbit radius
+REG_MOON_RM = 15.6           # moon radius
+REG_MOON_RL = 16.25          # lobe radius; a hair over RM so age 0 is clean
+# The sky is exactly as wide as the two lobes: its arc is tangent to each
+# lobe circle, so it springs straight off their outer tips instead of
+# overshooting them and leaving the edge sticking out either side.
+REG_MOON_RD = REG_MOON_HALF + REG_MOON_RL          # aperture radius, 39.65
+# A third, smaller lobe between the two: the largest that still clears a
+# moon riding over the crown (they orbit at HALF, so a moon's rim never
+# comes closer to the pivot than HALF - RM), which keeps it decorative —
+# it can never eat into a phase the way the outer two are meant to.
+REG_MOON_RC = REG_MOON_HALF - REG_MOON_RM          # centre lobe radius, 7.8
 
 
 def reg_moon_pt(u, v):
@@ -1653,16 +1685,21 @@ def reg_moon_pt(u, v):
 # multi-subpath fills don't render on the watch.  One frame per disc
 # rotation over a synodic month (the two-moon disc turns 180 deg).
 REG_MOON_FRAMES = 30
-REG_MOON_CROP = (135, 24, 205, 94)      # sprite bbox on the 240 canvas
+REG_MOON_CROP = (111, 17, 195, 101)     # sprite bbox on the 240 canvas
 # stars in the disc's own frame: (radius, angle from the lobe axis, size).
 # They ride round with the disc, so each one drifts through the sky over
-# the month; anything past the aperture radius is simply clipped away.
-REG_MOON_STARS = [(7, 118, 1.1), (9, 24, 1.3), (11, 196, 1.0), (12, 78, 1.2),
-                  (13, 302, 1.1), (15, 152, 1.3), (16, 8, 1.0), (17, 244, 1.2),
-                  (19, 96, 1.1), (20, 330, 1.3), (21, 176, 1.0), (22, 46, 1.2),
-                  (23, 268, 1.1), (24, 130, 1.3), (25, 356, 1.0), (26, 208, 1.2),
-                  (27, 62, 1.1), (28, 288, 1.2), (29, 144, 1.0), (30, 18, 1.3),
-                  (30, 226, 1.1), (31, 104, 1.2), (32, 316, 1.0), (32, 166, 1.1)]
+# the month.  Radii are spread to fill the sky rather than scaled with the
+# rest of the complication, so that narrowing the dome onto the lobes does
+# not park the outer ones under the bezel where they would be clipped
+# mid-dot; the widest sits at 37.3 + 1.4, just inside the 39.65 arc.
+REG_MOON_STARS = [(8.2, 118, 1.4), (10.5, 24, 1.7), (12.8, 196, 1.3),
+                  (14, 78, 1.6), (15.2, 302, 1.4), (17.5, 152, 1.7),
+                  (18.7, 8, 1.3), (19.8, 244, 1.6), (22.2, 96, 1.4),
+                  (23.3, 330, 1.7), (24.5, 176, 1.3), (25.7, 46, 1.6),
+                  (26.8, 268, 1.4), (28, 130, 1.7), (29.2, 356, 1.3),
+                  (30.3, 208, 1.6), (31.5, 62, 1.4), (32.7, 288, 1.6),
+                  (33.8, 144, 1.3), (35, 18, 1.7), (35, 226, 1.4),
+                  (36.2, 104, 1.6), (37.3, 316, 1.3), (37.3, 166, 1.4)]
 
 
 def render_regence_moon_frame(i, n=REG_MOON_FRAMES):
@@ -1700,14 +1737,16 @@ def render_regence_moon_frame(i, n=REG_MOON_FRAMES):
     sky.putalpha(ImageChops.multiply(sky.split()[3], mask))
     img.alpha_composite(sky)
 
-    # the two dial lobes sit on the straight edge, over the sky
+    # the dial lobes sit on the straight edge, over the sky: the two big
+    # ones the moons hide behind, and the small decorative one between them
     d = ImageDraw.Draw(img)
-    rl = REG_MOON_RL
-    lobes = [reg_moon_pt(-REG_MOON_HALF, 0), reg_moon_pt(REG_MOON_HALF, 0)]
-    for lx, ly in lobes:
+    lobes = [(reg_moon_pt(-REG_MOON_HALF, 0), REG_MOON_RL),
+             (reg_moon_pt(REG_MOON_HALF, 0), REG_MOON_RL),
+             (reg_moon_pt(0, 0), REG_MOON_RC)]
+    for (lx, ly), rl in lobes:
         circle(d, lx, ly, rl, fill=WHITE)
     d.arc(dome, a0, a0 + 180, fill=DARK, width=int(1.4 * SS))
-    for lx, ly in lobes:
+    for (lx, ly), rl in lobes:
         d.arc(P(lx - rl, ly - rl, lx + rl, ly + rl), a0, a0 + 180,
               fill=DARK, width=int(1.1 * SS))
 
@@ -1721,15 +1760,43 @@ def reg_month_angle(m):
     return 199 - m * (121.0 / 11.0)
 
 
+def reg_rail_span(r, edge=124):
+    """Watch angles (about the month pivot) at which a rail of radius `r`
+    runs off the dial.  Circle/circle intersection with the `edge` ring;
+    a few px past the 119 mask so the rails reach the rim and the round
+    clip trims the overshoot rather than the arc stopping short."""
+    px, py = REG_MON_PIVOT
+    dx, dy = REG_CENTER[0] - px, REG_CENTER[1] - py
+    dist = math.hypot(dx, dy)
+    base = math.degrees(math.atan2(dx, -dy))      # pivot -> dial centre
+    half = math.degrees(math.acos((r * r + dist * dist - edge * edge)
+                                  / (2 * r * dist)))
+    return base - half, base + half
+
+
 def reg_date_angle(d):
-    # a near-full retrograde ring about the lower sub-dial: 1 just right of
-    # top, sweeping clockwise all the way round to 31 just left of top
-    return 5 + (d - 1) * (350.0 / 30.0)
+    # a 306 deg retrograde ring about the lower sub-dial, sweeping clockwise
+    # from 1 round to 31; the 54 deg it stops short of a full turn is the
+    # gap left open at the top, where the hand flies back from 31 to 1.
+    # The ring's centre sits only 57px below the screen centre, so 1 and 31
+    # are the closest thing on the dial to the watch's own hands hub and
+    # this gap is what keeps them out from under it: it leaves them 20.8px
+    # out, clear of a hub up to 42px across against the ~30px that
+    # layout_engine.HUB_R records.  Do not narrow it back to that — the
+    # margin is deliberate, the numerals read as hidden long before they
+    # actually touch.  Widening the ring or raising its centre eats into it.
+    return 27 + (d - 1) * (306.0 / 30.0)
 
 
 def reg_dow_angle(w):
     # the seven days evenly around the whole sub-dial, Sun at the top
     return w * (360.0 / 7.0)
+
+
+def reg_pwr_angle(soc):
+    # battery 0..100 across a sector centred on the sub-dial's own 12:
+    # empty to the upper left, full to the upper right (must match app.js)
+    return (soc / 100.0 - 0.5) * REG_PWR_SPAN
 
 
 def reg_upright_tangent(a):
@@ -1769,7 +1836,13 @@ def bg_regence():
                   angle=reg_upright_tangent(a))
         else:
             circle(d, x, y, 1.7, fill=BLACK)
-    circle(d, px, py, 4.5, fill=BLACK)      # month hand hub
+    # grey rails either side of the fan, clearing the ink by ~2px (the
+    # letters run out to r=73 where the J tails hang, in to r=60); both
+    # run rim to rim and die under the round mask
+    for r in (REG_MON_R - 7, REG_MON_R + 10):
+        a0, a1 = reg_rail_span(r)
+        arc(d, px, py, r, a0, a1, fill=DARK, w=1.2)
+    circle(d, px, py, 5.5, fill=BLACK)      # month hand hub
 
     # ---- date retrograde ring: odd numbers tangent (kept upright), dots
     for dd_ in range(1, 32):
@@ -1780,7 +1853,7 @@ def bg_regence():
                   angle=reg_upright_tangent(a))
         else:
             circle(d, x, y, 1.5, fill=DARK)
-    circle(d, dcx, dcy, 5, fill=BLACK)      # date hand hub
+    circle(d, dcx, dcy, 5.5, fill=BLACK)    # date hand hub
 
     # ---- weekday sub-dial: single big initials around the whole circle ----
     for w in range(7):
@@ -1788,7 +1861,23 @@ def bg_regence():
         lx, ly = pol(wcx, wcy, REG_DOW_R - 12, a)
         stamp(img, lx, ly, DOWS3[w][0], serif_font_bold(18), fill=BLACK,
               angle=reg_upright_tangent(a))
-    circle(d, wcx, wcy, 6, fill=BLACK)      # weekday hand hub
+    circle(d, wcx, wcy, 5.5, fill=BLACK)    # weekday hand hub
+
+    # ---- power reserve: a graduated sector between 8 and 9 ------------
+    qcx, qcy = REG_PWR_CENTER
+    arc(d, qcx, qcy, REG_PWR_R, reg_pwr_angle(0), reg_pwr_angle(100),
+        fill=DARK, w=1.2)
+    for i in range(9):                      # 0, 12.5, .. 100 percent
+        a = reg_pwr_angle(i * 12.5)
+        major = (i % 4) == 0                # empty / half / full
+        x0, y0 = pol(qcx, qcy, REG_PWR_R - (12 if major else 7), a)
+        x1, y1 = pol(qcx, qcy, REG_PWR_R, a)
+        line(d, [x0, y0, x1, y1], fill=BLACK if major else DARK,
+             w=1.5 if major else 1.0)
+    for s, soc in (('E', 0), ('F', 100)):   # empty / full, upright
+        x, y = pol(qcx, qcy, REG_PWR_LABEL_R, reg_pwr_angle(soc))
+        stamp(img, x, y, s, serif_font_bold(14), fill=BLACK)
+    circle(d, qcx, qcy, 5.5, fill=BLACK)    # power-reserve hand hub
 
     # (the moon complication is a phase sprite drawn on top at runtime)
 

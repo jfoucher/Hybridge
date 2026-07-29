@@ -169,11 +169,14 @@ forwarding, and no drawing while invisible.
 ## Notes
 
 * **Hands-hub blind spot**: the physical hands attach at screen
-  center, hiding a ~25 px diameter disc around (120,120) — measured on
-  the watch, the docs long said 20. All layouts keep text/glyphs out of
-  roughly x/y 105..135 (arcs and full-width rules may pass under it).
-  Renders draw the hub as a dark disc, sized from
-  `layout_engine.HUB_R`.
+  center, hiding a ~30 px diameter disc around (120,120) — measured on
+  the watch; the docs long said 20, then 25. All layouts keep
+  text/glyphs out of roughly x/y 105..135 (arcs and full-width rules
+  may pass under it).  Renders draw the hub as a dark disc, sized from
+  `layout_engine.HUB_R`.  Clearing it is not the same as reading
+  clearly next to it: ink a couple of px outside the disc still looks
+  swallowed by it, so give anything that approaches the centre real
+  margin rather than the minimum the audit accepts.
 
 * Watchface contract honored everywhere: buttons run
   `config.button_assignments` shortcuts (`open_app`) when configured

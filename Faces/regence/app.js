@@ -1,9 +1,10 @@
 /*
  * Regence - a silver-guilloche calendar in the spirit of a Breguet
  * Classique.  Two central retrograde hands (month upper-left, date
- * across the bottom), a weekday sub-dial on the right and a moon-phase
- * aperture upper-right.  All scales are baked into the background; the
- * three hands are svg_image needles and the moon is a sprite swap.
+ * across the bottom), a weekday sub-dial on the right, a power-reserve
+ * sector between 8 and 9 and a moon-phase aperture upper-right.  All
+ * scales are baked into the background; the four hands are svg_image
+ * needles and the moon is a sprite swap.
  */
 return {
 	"node_name": '',
@@ -54,14 +55,20 @@ return {
 	"month_angle": function (m0) {
 		return 199 - m0 * (121.0 / 11.0);
 	},
-	// date: big retrograde ring about the lower sub-dial (centre 120,180),
-	// 1 up-right sweeping clockwise round to 31 up-left
+	// date: big 306 deg retrograde ring about the lower sub-dial
+	// (centre 120,177), 1 up-right sweeping clockwise round to 31 up-left;
+	// the 54 deg gap at the top keeps 1 and 31 clear of the hands hub
 	"date_angle": function (d) {
-		return 5 + (d - 1) * (350.0 / 30.0);
+		return 27 + (d - 1) * (306.0 / 30.0);
 	},
 	// weekday sub-dial on the right: seven days around the whole circle
 	"dow_angle": function (w) {
 		return w * (360.0 / 7.0);
+	},
+	// power reserve between 7 and 8: battery across a 45 deg sector
+	// centred on that gauge's own 12 (must match gen_assets.py)
+	"pwr_angle": function (soc) {
+		return (soc / 100.0 - 0.5) * 45.0;
 	},
 
 	"compute": function () {
@@ -75,6 +82,7 @@ return {
 			"mon": this.month_angle(c.month || 0),
 			"dat": this.date_angle(d),
 			"dow": this.dow_angle(w),
+			"pwr": this.pwr_angle(c.battery_soc || 0),
 			"moon": this.moon_frame(y, m, d)
 		};
 	},

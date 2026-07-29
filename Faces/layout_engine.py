@@ -69,7 +69,7 @@ GREY = [0, 85, 170, 255]
 FONT = '/System/Library/Fonts/Helvetica.ttc'   # stand-in for the watch font
 FONT_INDEX = 1                                # Bold
 SS = 4                                        # supersample for arcs/text
-HUB_R = 12.5    # the hands hub measured ~25 px across on the watch
+HUB_R = 15.0    # the hands hub measured ~30 px across on the watch
 
 # ------------------------------------------------------------- scenarios
 #
@@ -411,8 +411,8 @@ def draw_layout(layout, info, icons, common=None, mask=True, hub=True):
         img = Image.composite(img, Image.new('RGBA', img.size,
                                              (0, 0, 0, 255)), m)
     if hub:
-        # the physical hands attach at the screen centre: a ~25px disc
-        # there (x/y 107.5..132.5) is never visible
+        # the physical hands attach at the screen centre: a ~30px disc
+        # there (x/y 105..135) is never visible
         d = ImageDraw.Draw(img)
         d.ellipse([(120 - HUB_R) * SS, (120 - HUB_R) * SS,
                    (120 + HUB_R) * SS, (120 + HUB_R) * SS],
