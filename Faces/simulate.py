@@ -73,6 +73,98 @@ def grow(b, v):
     return (b[0], b[1] - v, b[2], b[3] + v)
 
 
+# --------------------------------------------------- baked-background art
+#
+# The text checks above only see `text` nodes, i.e. values the watch fills
+# in at runtime.  A face that bakes its lettering into the background image
+# is invisible to them: regence draws every numeral in `gen_assets.py`, so
+# it audited clean while its date ring's 1 and 31 sat under the hands hub.
+#
+# So look at the pixels too.  The rule cannot simply be "no ink under the
+# hub" — the docs explicitly allow ring arcs and full-width rules to pass
+# beneath it, and several faces rely on that.  What is never fine is a
+# *mark* that lives there: a numeral, a letter, an index.  Those are
+# separated by extent, not by position.  A glyph is a small blob a few px
+# across; a rail or a guilloche ring that happens to cross the hub is part
+# of a component spanning most of the dial.  So: flood-fill the ink into
+# connected components, and report the ones that reach the hub while being
+# small enough to be a mark rather than a line passing through.
+
+BAKED_MAX_SPAN = 34     # bbox side above which a component is a rule, not a mark
+BAKED_INK_DELTA = 60    # luminance step from the dial's field colour = ink
+BAKED_MIN_UNDER = 6     # px under the hub before it is worth reporting; rayon's
+                        # sunburst clips single antialiased ray tips in there,
+                        # while a genuinely buried numeral loses 17-27
+
+
+def _ink_mask(face):
+    """(pixels, field) for the face's baked background, or (None, None).
+
+    `field` is the modal luminance inside the dial, so this works on a
+    white dial with black lettering and on regence's inverted one without
+    being told which it is."""
+    import gen_assets
+    if face not in gen_assets.BACKGROUNDS:
+        return None, None
+    img = gen_assets.BACKGROUNDS[face]().resize((240, 240),
+                                                Image.LANCZOS).convert('L')
+    px = img.load()
+    hist = {}
+    for y in range(240):
+        for x in range(240):
+            if math.hypot(x - 120, y - 120) < 112:
+                v = px[x, y]
+                hist[v] = hist.get(v, 0) + 1
+    if not hist:
+        return None, None
+    field = max(hist.items(), key=lambda kv: kv[1])[0]
+    ink = [[False] * 240 for _ in range(240)]
+    for y in range(240):
+        for x in range(240):
+            if (math.hypot(x - 120, y - 120) < SCREEN_R
+                    and abs(px[x, y] - field) > BAKED_INK_DELTA):
+                ink[y][x] = True
+    return ink, field
+
+
+def baked_findings(face):
+    """Baked marks the hands hub will swallow."""
+    ink, _ = _ink_mask(face)
+    if ink is None:
+        return []
+    seen = [[False] * 240 for _ in range(240)]
+    findings = []
+    for sy in range(240):
+        for sx in range(240):
+            if not ink[sy][sx] or seen[sy][sx]:
+                continue
+            stack, comp = [(sx, sy)], []
+            seen[sy][sx] = True
+            while stack:                       # 8-connected flood fill
+                x, y = stack.pop()
+                comp.append((x, y))
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        nx, ny = x + dx, y + dy
+                        if (0 <= nx < 240 and 0 <= ny < 240
+                                and ink[ny][nx] and not seen[ny][nx]):
+                            seen[ny][nx] = True
+                            stack.append((nx, ny))
+            xs = [p[0] for p in comp]
+            ys = [p[1] for p in comp]
+            if max(max(xs) - min(xs), max(ys) - min(ys)) > BAKED_MAX_SPAN:
+                continue                       # a rule or ring, not a mark
+            under = [p for p in comp
+                     if math.hypot(p[0] - 120, p[1] - 120) < HUB_R]
+            if len(under) >= BAKED_MIN_UNDER:
+                cx, cy = sum(xs) / len(xs), sum(ys) / len(ys)
+                findings.append(
+                    'baked art at (%d,%d) is under the hands hub '
+                    '(%d px of it, hub r=%g)'
+                    % (round(cx), round(cy), len(under), HUB_R))
+    return findings
+
+
 def audit(faces, scenarios=('day', 'ace')):
     bad = 0
     for face in faces:
@@ -102,6 +194,7 @@ def audit(faces, scenarios=('day', 'ace')):
                             and t[1] < b2[3] and b2[1] < t[3]):
                         findings.append(
                             f'[{scenario}] "{s}" overlaps "{s2}"')
+        findings.extend(baked_findings(face))
         if findings:
             bad += 1
             print(f'{face}:')
@@ -119,7 +212,7 @@ def main():
     ap.add_argument('--scenario', default='day', choices=SCENARIOS)
     ap.add_argument('--sheet', help='write an all-faces contact sheet PNG')
     ap.add_argument('--audit', action='store_true',
-                    help='check text vs hub / screen edge / other text')
+                    help='check text vs hub/edge/text, and baked art vs hub')
     args = ap.parse_args()
 
     if args.audit:

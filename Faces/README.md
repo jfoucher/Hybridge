@@ -148,8 +148,12 @@ things goes through it, so the geometry is written down exactly once:
 * `simulate.py <face>` writes `<face>/build/sim-<scenario>.png`;
   `--sheet gallery.png` renders the whole collection (see
   `gallery.png`), `--audit` checks text against the hub, the screen
-  edge and other text. It found its first real bug on day one: the
-  Gazette masthead was clipped by the round screen.
+  edge and other text, *and* baked background art against the hub. It
+  found its first real bug on day one: the Gazette masthead was
+  clipped by the round screen. The baked-art half was added later,
+  after regence spent several revisions auditing clean with two date
+  numerals hidden under the hands hub — text-node checks cannot see a
+  face that draws its own lettering.
 * `gen_assets.render_preview()` draws the companion-app thumbnail and
   the on-watch `!preview.rle` the same way — the real values the face
   computes for the `day` scenario, in the real places. A new face

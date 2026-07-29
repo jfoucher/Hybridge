@@ -8,8 +8,9 @@ draw in plain greys: BLACK 0, DARK 85, LITE 170, WHITE 255.
 """
 import math
 import os
+import random
 
-from PIL import Image, ImageChops, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 import layout_engine
 
@@ -1676,6 +1677,71 @@ REG_MOON_RD = REG_MOON_HALF + REG_MOON_RL          # aperture radius, 39.65
 REG_MOON_RC = REG_MOON_HALF - REG_MOON_RM          # centre lobe radius, 7.8
 
 
+# The face is the night sky, so stars are scattered over the whole dial and
+# not just inside the moon aperture.  They are placed by seeded rejection
+# sampling rather than by hand: the dial carries four complications' worth
+# of ink that has moved repeatedly, and a hand-written table would have to
+# be re-derived every time one of them shifts.
+REG_SKY_SEED = 20260729      # fixed: same seed + same ink = same sky
+REG_SKY_COUNT = 84           # target; the sampler stops early if it jams
+REG_SKY_GAP = 11             # minimum spacing between two stars
+REG_SKY_INK = 9              # MinFilter size, so ink grows by 4px of clearance
+REG_SKY_RIM = 112            # keep clear of the bezel ring at 116
+REG_SKY_HUB = 21             # and of the hands hub (HUB_R plus a margin)
+
+
+def reg_sky_field(img, exclude=()):
+    """Star positions over the empty parts of the dial.
+
+    `img` is the dial as drawn, before inversion — a white field with dark
+    ink — so one MinFilter grows every existing mark by the clearance we
+    want, and any pixel still white is a pixel a star may have.  That way
+    the sky is derived from whatever the dials actually drew instead of
+    from a table that silently rots when one of them moves.
+
+    `exclude` is a list of (x, y, r) discs to keep clear on top of the ink:
+    the moon aperture, whose sprite would cover anything under it."""
+    occ = img.resize((W, W), Image.LANCZOS).convert('L')
+    occ = occ.filter(ImageFilter.MinFilter(REG_SKY_INK)).load()
+    rng = random.Random(REG_SKY_SEED)
+    stars = []
+    for _ in range(30000):
+        if len(stars) >= REG_SKY_COUNT:
+            break
+        x, y = rng.uniform(6, W - 6), rng.uniform(6, W - 6)
+        r = math.hypot(x - 120, y - 120)
+        if not REG_SKY_HUB < r < REG_SKY_RIM:
+            continue
+        if occ[int(x), int(y)] < 200:
+            continue
+        if any(math.hypot(x - ex, y - ey) < er for ex, ey, er in exclude):
+            continue
+        if any(math.hypot(x - sx, y - sy) < REG_SKY_GAP for sx, sy, _, _ in stars):
+            continue
+        # a third of them one shade down, so the field has some depth
+        stars.append((x, y, rng.uniform(1.0, 1.8), rng.random() < 0.32))
+    return stars
+
+
+def reg_invert(img):
+    """Flip the face's palette: black <-> white, dark <-> lite.
+
+    The four levels are the symmetric ramp 0/85/170/255, so a single
+    subtract performs all four swaps exactly — no lookup table, and no
+    chance of the dial and the moon sprite disagreeing about what the
+    inverse of a shade is.  Alpha is left alone so the sprite keeps its
+    transparent surround, and this runs on the supersampled image, before
+    the downsample, so antialiased edges inverse correctly too.
+
+    The dial goes through here; the moon sprite does not (it is drawn in
+    final colours, see render_regence_moon_frame), and the needles are
+    drawn by the watch rather than by us, so they invert via `color` in
+    layout.json (the svg palette reads index 0 as white and 4 as black)."""
+    r, g, b, a = img.split()
+    inv = ImageChops.invert(Image.merge('RGB', (r, g, b)))
+    return Image.merge('RGBA', inv.split() + (a,))
+
+
 def reg_moon_pt(u, v):
     """Screen point `u` along the aperture's straight edge and `v` into the
     sky, measured from the pivot (the complication's own frame)."""
@@ -1742,19 +1808,27 @@ def render_regence_moon_frame(i, n=REG_MOON_FRAMES):
     sky.putalpha(ImageChops.multiply(sky.split()[3], mask))
     img.alpha_composite(sky)
 
-    # the dial lobes sit on the straight edge, over the sky: the two big
-    # ones the moons hide behind, and the small decorative one between them
+    # The lobes sit on the straight edge, over the sky: the two big ones the
+    # moons hide behind, and the small decorative one between them.  They are
+    # filled the same black as the dial, so they read as sky rather than as
+    # shutters — a moon simply goes out behind one — and only their bezels
+    # draw.  Those bezels are LITE, not DARK, because they now have to show
+    # against black instead of against a white dial.
     d = ImageDraw.Draw(img)
     lobes = [(reg_moon_pt(-REG_MOON_HALF, 0), REG_MOON_RL),
              (reg_moon_pt(REG_MOON_HALF, 0), REG_MOON_RL),
              (reg_moon_pt(0, 0), REG_MOON_RC)]
     for (lx, ly), rl in lobes:
-        circle(d, lx, ly, rl, fill=WHITE)
-    d.arc(dome, a0, a0 + 180, fill=DARK, width=int(1.4 * SS))
+        circle(d, lx, ly, rl, fill=BLACK)
+    d.arc(dome, a0, a0 + 180, fill=LITE, width=int(1.4 * SS))
     for (lx, ly), rl in lobes:
         d.arc(P(lx - rl, ly - rl, lx + rl, ly + rl), a0, a0 + 180,
-              fill=DARK, width=int(1.1 * SS))
+              fill=LITE, width=int(1.1 * SS))
 
+    # Deliberately NOT run through reg_invert: the aperture is already drawn
+    # in final colours.  Inverting it once the dial went black turned the
+    # night sky white, which is what this complication cannot be — the sky
+    # here has to be the same black as the face around it.
     x0, y0, x1, y1 = REG_MOON_CROP
     return img.crop((x0 * SS, y0 * SS, x1 * SS, y1 * SS))
 
@@ -1884,12 +1958,25 @@ def bg_regence():
         stamp(img, x, y, s, serif_font_bold(14), fill=BLACK)
     circle(d, qcx, qcy, 5.5, fill=BLACK)    # power-reserve hand hub
 
+    # ---- the sky itself: stars over every empty patch of dial ----------
+    # Drawn last, so the sampler sees all four complications' ink, and in
+    # pre-inversion colours: black becomes white, dark becomes lite.
+    for x, y, sr, dim in reg_sky_field(
+            img, exclude=[(REG_MOON_PIVOT[0], REG_MOON_PIVOT[1],
+                           REG_MOON_RD + 3)]):
+        circle(d, x, y, sr, fill=DARK if dim else BLACK)
+
     # (the moon complication is a phase sprite drawn on top at runtime)
 
-    # clip everything to the round dial on black
+    img = reg_invert(img)
+
+    # Clip to the round dial on black.  The surround is the screen, not
+    # part of the design, so it stays black on both sides of the
+    # inversion — hence masking at the dial's own 118 rather than 119,
+    # which would leave the inverted off-dial ring showing as white.
     final = Image.new('RGBA', img.size, BLACK)
     fmask = Image.new('L', img.size, 0)
-    ImageDraw.Draw(fmask).ellipse(P(cx - 119, cy - 119, cx + 119, cy + 119),
+    ImageDraw.Draw(fmask).ellipse(P(cx - 118, cy - 118, cx + 118, cy + 118),
                                   fill=255)
     final.paste(img, (0, 0), fmask)
     return final

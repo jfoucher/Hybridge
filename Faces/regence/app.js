@@ -1,6 +1,8 @@
 /*
- * Regence - a silver-guilloche calendar in the spirit of a Breguet
- * Classique.  Two central retrograde hands (month upper-left, date
+ * Regence - a night-sky calendar in the spirit of a Breguet Classique,
+ * the whole dial a starfield rather than a silver field, so the moon
+ * aperture opens onto the same sky as the face around it.
+ * Two central retrograde hands (month upper-left, date
  * across the bottom), a weekday sub-dial on the right, a power-reserve
  * sector between 8 and 9 and a moon-phase aperture upper-right.  All
  * scales are baked into the background; the four hands are svg_image

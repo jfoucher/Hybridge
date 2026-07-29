@@ -402,11 +402,34 @@ how `simple/` is regression-tested without a watch:
   one place the renderer and simulate.py's --audit take it from.
   Clearing the disc is not the same as reading clearly beside it — the
   audit's `HUB_R + 2` is a collision margin, and ink that only just
-  passes it still looks swallowed by the hub. Regence's date ring is
+  passes it still looks swallowed by the hub.
+  `simulate.py --audit` checks this on two fronts, because they fail
+  independently: `text` nodes (values the watch fills in) via their
+  glyph boxes, and **baked background art** via the pixels. The second
+  exists because the first sees nothing on a face that draws its own
+  lettering in `gen_assets.py` — regence audited clean for several
+  revisions with two date numerals sitting under the hub. Rings and
+  rules passing under the hub stay legal: the pixel check flood-fills
+  the ink and only reports components small enough to be a *mark*
+  (bbox ≤ 34 px) that lose ≥ 6 px to the hub, so a numeral is caught
+  and a sunburst ray or guilloche ring crossing the centre is not.
+  Regence's date ring is
   the worked example: 1 and 31 sat 2.7 px outside the disc as it was
   then measured, passed the audit, and read as hidden; its opening was
   widened until they stand 20.8 px out from the centre — 5.8 px clear
   of the hub at 15.0, and still clear if it is measured larger again.
+
+* **Stale `__pycache__` can outlive an edit to `gen_assets.py`.**
+  Python revalidates a `.pyc` on (source mtime, source size), so a
+  change that keeps the file the same length — swapping one constant
+  for another of equal width, e.g. `15 + (d-1)*(330.0/30.0)` for
+  `27 + (d-1)*(306.0/30.0)` — and lands in the same second as the
+  recorded mtime is not noticed. Every later process then runs the old
+  bytecode while the source reads correctly, and `inspect.getsource`
+  agrees with the source, so the two disagree with no warning. Hit
+  while A/B-ing a face's geometry. `rm -rf Faces/__pycache__` between
+  A/B builds; if a rendered face contradicts the source, check this
+  before disbelieving the source.
 
 * `jq -r` leaves a trailing newline in `display_name` — harmless.
 * jerry es5.1: no `Date`, quote reserved words used as keys
