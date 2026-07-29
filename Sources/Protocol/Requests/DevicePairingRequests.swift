@@ -58,10 +58,13 @@ final class ConfirmOnDeviceRequest: FossilRequest {
 /// the connection while resetting.
 final class FactoryResetRequest: FossilRequest {
     override var startUUID: CBUUID { FossilUUID.char0002 }
+    /// The watch sends nothing back — it just resets — so the ATT write
+    /// acknowledgement is the only evidence the command was delivered. Waiting
+    /// for it is the difference between "sent" and "we tried to send".
+    override var finishesOnWriteAck: Bool { true }
 
     override func startData() throws -> Data {
-        isFinished = true
-        return Data([0x02, 0xF1, 0x23, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
+        Data([0x02, 0xF1, 0x23, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
     }
 }
 

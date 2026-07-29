@@ -255,4 +255,125 @@ struct WappBuilder {
         }
         return out
     }
+
+    /// Why a `.wapp` could not be re-labelled. Each case names the specific
+    /// assumption the file broke, because the rescue only gets one shot per
+    /// reboot window and "returned nil" costs a whole one.
+    enum WappRenameError: Error, CustomStringConvertible {
+        case notAContainer(String)
+        case checksumNotCRC32C
+        case noIdentifier
+        case badName(String)
+        case verificationFailed(String)
+
+        var description: String {
+            switch self {
+            case .notAContainer(let detail): "not a .wapp container (\(detail))"
+            case .checksumNotCRC32C: "trailing checksum isn't CRC32C — re-labelling would corrupt it"
+            case .noIdentifier: "no readable identifier in the code section"
+            case .badName(let name): "unusable replacement identifier \"\(name)\""
+            case .verificationFailed(let detail): "rewritten file failed verification (\(detail))"
+            }
+        }
+    }
+
+    /// Rewrites a container's identifier — the name of the first code-section
+    /// entry, which is what the watch lists and what it keys an installed app
+    /// by. Everything else is preserved byte for byte.
+    ///
+    /// This exists for the watchface rescue. A watch that has stopped
+    /// answering `delete` still accepts an install on the APP_CODE handle
+    /// (a put straight to an app's *own* slot is refused: "not supported"), so
+    /// the only way to replace broken code in a slot is to install a healthy
+    /// face carrying the broken one's identifier.
+    ///
+    /// The identifier's length is part of the file: every absolute offset in
+    /// the inner header's table, the transport header's payload length and the
+    /// trailing CRC32C all move with it. The code section itself is the first
+    /// section and never shifts.
+    ///
+    /// Deliberately *not* gated on `WappReader.isValidContainer`: that check
+    /// encodes what our own builder emits (exactly seven used offset slots,
+    /// the last one being the end of the file), and a stock Fossil face is not
+    /// obliged to lay its header out that way — the first attempt on one
+    /// returned nil for that reason alone. What is checked here is only what
+    /// this rewrite actually depends on: the transport envelope, a trailing
+    /// CRC32C that already matches (otherwise recomputing one would produce a
+    /// file the watch rejects), and a readable identifier. Every offset slot
+    /// pointing past the code section is shifted, whichever slots those are.
+    static func renamingIdentifier(in wapp: Data, to newIdentifier: String) throws -> Data {
+        guard wapp.count >= 92, wapp.count <= WappReader.maxContainerSize,
+              wapp.u16LE(at: 0) == FossilFileHandle.appCode.rawValue, wapp.u32LE(at: 4) == 0 else {
+            throw WappRenameError.notAContainer("size \(wapp.count), handle 0x\(String(format: "%04X", Int(wapp.count >= 2 ? wapp.u16LE(at: 0) : 0)))")
+        }
+        let payloadLength = Int(wapp.u32LE(at: 8))
+        guard payloadLength >= 76, 12 + payloadLength + 4 == wapp.count else {
+            throw WappRenameError.notAContainer("declared payload \(payloadLength), file \(wapp.count)")
+        }
+        guard wapp.u32LE(at: 12 + payloadLength) == Checksums.crc32c(wapp.slice(12, payloadLength)) else {
+            throw WappRenameError.checksumNotCRC32C
+        }
+        guard let oldIdentifier = WappReader.identifier(fromWapp: wapp) else {
+            throw WappRenameError.noIdentifier
+        }
+        if oldIdentifier == newIdentifier { return wapp }
+        let newNameBytes = newIdentifier.nullTerminatedUTF8()
+        guard newNameBytes.count > 1, newNameBytes.count <= Int(UInt8.max) else {
+            throw WappRenameError.badName(newIdentifier)
+        }
+
+        let codeStart = Int(wapp.u32LE(at: 24))
+        let oldNameLength = Int(wapp.u8(at: codeStart))     // includes the null
+        let delta = newNameBytes.count - oldNameLength
+
+        var out = Data()
+        out.append(wapp.slice(0, codeStart))                // header + offsets
+        out.append(UInt8(newNameBytes.count))
+        out.append(newNameBytes)
+        // Everything after the old name, unchanged.
+        let tailStart = codeStart + 1 + oldNameLength
+        out.append(wapp.slice(tailStart, wapp.count - 4 - tailStart))
+
+        // Shift every offset slot that points past the code section — unused
+        // slots hold 0 and the code offset equals `codeStart`, so both are
+        // left alone by the same comparison.
+        for field in stride(from: 16, through: 12 + 76 - 4, by: 4) {
+            let value = Int(out.u32LE(at: field))
+            if value > codeStart { patchU32(&out, at: field, UInt32(value + delta)) }
+        }
+        let patchedLength = UInt32(payloadLength + delta)
+        patchU32(&out, at: 8, patchedLength)
+        out.appendUInt32LE(Checksums.crc32c(out.slice(12, Int(patchedLength))))
+
+        guard WappReader.identifier(fromWapp: out) == newIdentifier else {
+            throw WappRenameError.verificationFailed("identifier reads back as " +
+                                                     "\(WappReader.identifier(fromWapp: out) ?? "nil")")
+        }
+        return out
+    }
+
+    /// One-line dump of a container's header, so a rename that can't proceed
+    /// says *why* in the log instead of just failing.
+    static func containerSummary(_ wapp: Data) -> String {
+        guard wapp.count >= 92 else { return "only \(wapp.count) bytes" }
+        let payloadLength = Int(wapp.u32LE(at: 8))
+        let crcOK = 12 + payloadLength + 4 == wapp.count
+            && wapp.u32LE(at: 12 + payloadLength) == Checksums.crc32c(wapp.slice(12, payloadLength))
+        let offsets = stride(from: 24, through: 84, by: 4)
+            .map { Int(wapp.u32LE(at: $0)) }
+            .prefix(while: { _ in true })
+        return "size \(wapp.count), payload \(payloadLength), type \(wapp.u8(at: 12)), " +
+               "crc32c \(crcOK ? "ok" : "MISMATCH"), " +
+               "identifier \(WappReader.identifier(fromWapp: wapp) ?? "nil"), " +
+               "offsets \(offsets.map(String.init).joined(separator: ","))"
+    }
+
+    /// Offset-relative u32 overwrite, matching `u32LE(at:)`'s indexing.
+    private static func patchU32(_ data: inout Data, at offset: Int, _ value: UInt32) {
+        let start = data.startIndex + offset
+        data.replaceSubrange(start..<(start + 4), with: [
+            UInt8(value & 0xFF), UInt8((value >> 8) & 0xFF),
+            UInt8((value >> 16) & 0xFF), UInt8((value >> 24) & 0xFF),
+        ])
+    }
 }

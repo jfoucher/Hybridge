@@ -103,12 +103,5 @@ struct ContentView: View {
                 showKeyEntry = true
             }
         }
-        .onChange(of: showKeyEntry) { _, showing in
-            // After the key sheet closes, continue init if we're connected.
-            if !showing, let id = registry.activeWatchID,
-               KeychainStore.loadKey(for: id) != nil, watch.connectionState == .initializing {
-                Task { await watch.initializeWatch() }
-            }
-        }
     }
 }

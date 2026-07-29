@@ -595,6 +595,11 @@ struct WatchManageSheet: View {
     @State private var confirmingForget = false
     @State private var confirmingReset = false
     @State private var pairing = false
+    @State private var rescueArmed = WatchfaceRescue.isArmed
+    @State private var choosingRescue = false
+    @State private var pickingRescueTarget = false
+    @State private var confirmingRescueReset = false
+    @State private var importingRescueFirmware = false
 
     init(known: KnownWatch) {
         self.known = known
@@ -643,6 +648,32 @@ struct WatchManageSheet: View {
             } message: {
                 Text("This wipes all data, apps and pairing from the watch and reboots it. You will need to set it up again from scratch.")
             }
+            .confirmationDialog("Rescue a rebooting watch", isPresented: $choosingRescue,
+                                titleVisibility: .visible) {
+                rescueModeDialog
+            } message: {
+                Text("The watch is only reachable for a few seconds per reboot, so the chosen step runs from the connection itself rather than now.")
+            }
+            .confirmationDialog("Which face is the bad one?", isPresented: $pickingRescueTarget,
+                                titleVisibility: .visible) {
+                ForEach(watch.installedApps.filter(\.isWatchface)) { face in
+                    Button(face.name) { armRescue(.overwriteFace, target: face.name) }
+                }
+            } message: {
+                Text("A working face is downloaded from the watch and reinstalled under this name, which forces the watch to clear the broken one.")
+            }
+            .confirmationDialog("Factory reset on next connection?",
+                                isPresented: $confirmingRescueReset, titleVisibility: .visible) {
+                Button("Erase everything on the watch", role: .destructive) {
+                    armRescue(.factoryReset)
+                }
+            } message: {
+                Text("This wipes the watch, including its pairing and auth key. The watch refuses it unless the stored auth key is the right one.")
+            }
+            .fileImporter(isPresented: $importingRescueFirmware,
+                          allowedContentTypes: [.data]) { result in
+                stageRescueFirmware(result)
+            }
         }
         .tint(Theme.accent)
     }
@@ -654,6 +685,7 @@ struct WatchManageSheet: View {
         appearanceSection
         if kind != .misfitQ { bluetoothSection }
         advancedSection
+        if kind.hasWatchfaces { rescueSection }
         connectionSection
     }
 
@@ -734,6 +766,120 @@ struct WatchManageSheet: View {
                         tap: canFactoryReset ? { confirmingReset = true } : nil)
                 .opacity(canFactoryReset ? 1 : 0.5)
         }
+    }
+
+    // MARK: Rescue
+
+    /// Recovery for a watch a bad watchface has put in a reboot loop. It has to
+    /// arm rather than act: such a watch is only reachable for a few seconds
+    /// per cycle, so the work runs from the connection itself, not from a tap.
+    private var rescueSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            SectionLabel("Rescue").padding(.top, 22)
+            ThemedCard {
+                SettingsRow(icon: rescueArmed ? "xmark.octagon" : "cross.case",
+                            iconTint: Theme.danger, iconFill: Theme.danger.opacity(0.1),
+                            title: rescueArmed ? "Cancel rescue" : "Rescue a rebooting watch",
+                            titleColor: Theme.danger,
+                            showChevron: !rescueArmed) {
+                    if rescueArmed {
+                        WatchfaceRescue.disarm()
+                        rescueArmed = false
+                        ToastCenter.shared.success(String(localized: "Rescue disarmed"))
+                    } else {
+                        choosingRescue = true
+                    }
+                }
+                if rescueArmed {
+                    Hairline(leading: 59)
+                    Text(armedRescueSummary)
+                        .font(Theme.sans(14, relativeTo: .footnote))
+                        .foregroundStyle(Theme.sub)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 16).padding(.vertical, 12)
+                }
+            }
+            rescueExplanation
+        }
+    }
+
+    /// Deliberately describes the mechanism, not a reassuring summary of it:
+    /// the step looks like a failed upload while it is working, and someone
+    /// reading the log needs to know that is the expected shape of success.
+    private var rescueExplanation: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("A watchface that crashes the firmware makes the watch reboot every minute or so, leaving only a few seconds per cycle to talk to it. A watch in that state answers reads — listing apps, downloading files — but **ignores every request to delete a file**, and hangs on anything the watchface engine itself has to handle, so neither removing the bad face nor switching away from it is possible.")
+            Text("**Replace a face** works around that. It downloads a stock face off the watch, re-labels it with the broken face's name and installs it. To install a face under a name that already exists, the watch's app manager has to clear the old one first — the delete it refuses to do for us, it will do for itself. The upload usually never gets acknowledged: the watch rebuilds its app storage and drops the link part-way. That is the fix working, not failing. At the next connection the bad face is gone, the watch can't find the face it was told to display, and it falls back to a stock one.")
+            Text("Expect to lose watchfaces you installed yourself — the rebuild tends to take all of them. Nothing in this step needs the auth key. It re-runs on every connection until a listing proves the face is gone, so keep the app open and the watch nearby.")
+            Text("The other options are for when that isn't the problem: **delete faces** only works on a watch that isn't crash-looping, and **factory reset** and **reflash firmware** are refused by the watch unless the stored auth key is the right one.")
+        }
+        .font(Theme.sans(13, relativeTo: .footnote))
+        .foregroundStyle(Theme.sub)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(.horizontal, 4).padding(.top, 12)
+    }
+
+    /// What the armed rescue will do on the next connection.
+    private var armedRescueSummary: String {
+        switch WatchfaceRescue.mode {
+        case .overwriteFace:
+            String(localized: "Armed: reinstall \(WatchfaceRescue.targetFace ?? "a face") with working code")
+        case .deleteFaces:
+            String(localized: "Armed: delete every face but one")
+        case .factoryReset:
+            String(localized: "Armed: factory reset")
+        case .reflashFirmware:
+            String(localized: "Armed: reflash firmware")
+        }
+    }
+
+    /// Separate choices rather than an automatic escalation: only the user
+    /// knows which face is the bad one, and the last two can't be undone.
+    @ViewBuilder
+    private var rescueModeDialog: some View {
+        Button("Replace a face…") { pickingRescueTarget = true }
+        Button("Delete every face but one") { armRescue(.deleteFaces) }
+        Button("Factory reset", role: .destructive) { confirmingRescueReset = true }
+        Button("Reflash firmware…") { importingRescueFirmware = true }
+    }
+
+    private func armRescue(_ mode: WatchfaceRescueMode, target: String? = nil) {
+        WatchfaceRescue.mode = mode
+        WatchfaceRescue.targetFace = target
+        WatchfaceRescue.isArmed = true
+        rescueArmed = true
+        ToastCenter.shared.success(String(
+            localized: "Rescue armed — keep the app open and near the watch"))
+        // If the watch happens to be reachable now, don't wait for a reconnect.
+        Task {
+            await watch.runWatchfaceRescue()
+            await MainActor.run { rescueArmed = WatchfaceRescue.isArmed }
+        }
+    }
+
+    /// Stages the DFU image outside the security-scoped URL, which is gone by
+    /// the time the watch next connects.
+    private func stageRescueFirmware(_ result: Result<URL, Error>) {
+        guard case let .success(url) = result else { return }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+              FirmwareReader.isFirmware(data) else {
+            ToastCenter.shared.error(String(localized: "That isn't a Hybrid HR firmware image"))
+            return
+        }
+        guard let directory = WatchfaceRescue.firmwareDirectory else { return }
+        let staged = directory.appendingPathComponent("rescue-firmware.bin")
+        do {
+            try? FileManager.default.removeItem(at: staged)
+            try data.write(to: staged, options: .atomic)
+        } catch {
+            ToastCenter.shared.error(String(localized: "Could not stage the firmware image"))
+            return
+        }
+        WatchfaceRescue.firmwareURL = staged
+        armRescue(.reflashFirmware)
     }
 
     /// Live keep-connected preference (the `known` snapshot can be stale after

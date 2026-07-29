@@ -274,6 +274,7 @@ final class WatchManager: ObservableObject, @unchecked Sendable {
     func disconnect() { fleet.disconnect() }
     func reconnectActive() { fleet.reconnectAll() }
     func setKeepConnected(_ keep: Bool, for id: UUID) { fleet.setKeepConnected(keep, for: id) }
+    func retryAfterAuthKeyChange(_ id: UUID) { fleet.retryAfterAuthKeyChange(id: id) }
     func cancelAdoptionConfirm() { fleet.cancelAdoptionConfirm() }
 
     // MARK: - Waiting / maintenance forwards
@@ -298,6 +299,10 @@ final class WatchManager: ObservableObject, @unchecked Sendable {
     // MARK: - Action forwards
 
     func initializeWatch() async { await target?.initializeWatch() }
+
+    /// Runs the watchface rescue right now on the active watch (the armed flag
+    /// also fires it automatically on every connect until it succeeds).
+    func runWatchfaceRescue() async { await target?.runWatchfaceRescue() }
 
     func readConfiguration() async throws { try await requireTarget().readConfiguration() }
     func refreshBattery() async throws { try await requireTarget().refreshBattery() }

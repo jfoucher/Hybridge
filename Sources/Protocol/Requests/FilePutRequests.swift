@@ -21,8 +21,11 @@ class FilePutRawRequest: FossilRequest {
         self.init(handle: handle.rawValue, file: file)
     }
 
-    override var idleTimeout: TimeInterval { 30 }
+    override var idleTimeout: TimeInterval { idleTimeoutOverride ?? 30 }
     override var isBulkTransfer: Bool { true }
+    /// The open is acked before the data streams, so a put that dies after that
+    /// point has a session on the watch that only a close ends.
+    override var openSessionHandle: UInt16? { handle }
 
     override func startData() throws -> Data {
         var data = Data([0x03])

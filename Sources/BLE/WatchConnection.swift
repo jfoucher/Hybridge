@@ -307,6 +307,18 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
         connectingDecayWorkItem = nil
     }
 
+    /// A new auth key was just stored for this watch: use it now instead of
+    /// waiting for the next reconnect. Returns false when there is no live
+    /// session to retry on, so the fleet can connect instead. On bleQueue.
+    func retryInitWithNewKey() -> Bool {
+        guard peripheral != nil else { return false }
+        // Still discovering (or a pending connect that hasn't fired): the
+        // init dispatch hasn't happened yet and will read the new key itself.
+        guard sessionStarted, initDispatched else { return true }
+        Task { await self.initializeWatch() }
+        return true
+    }
+
     /// Bluetooth was turned off: clear the peripheral/session state (the
     /// peripheral iOS handed us is now invalid) but keep `userWantsConnection`
     /// so the fleet reconnects on power-on. Without clearing `peripheral`,
@@ -563,6 +575,20 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
         let continuation = currentContinuation
         if let request = currentRequest {
             addLog("✗ \(request.name): \(error.localizedDescription)")
+            // Walking away from a half-finished transfer leaves the watch's
+            // file socket open, and every following open is then refused —
+            // which turns one timeout into a wedged connection. Fire the close
+            // the request never got to send. Best effort: no reply is awaited
+            // (there is no request in flight to route one to) and a dead link
+            // simply drops it.
+            if let handle = request.openSessionHandle, let peripheral,
+               peripheral.state == .connected,
+               let characteristic = characteristics[FossilUUID.char0003] {
+                var close = Data([0x09])
+                close.appendUInt16LE(handle)
+                peripheral.writeValue(close, for: characteristic, type: .withResponse)
+                addLog(String(format: "  closing file session 0x%04X after failure", Int(handle)))
+            }
         }
         currentRequest = nil
         currentContinuation = nil
@@ -935,7 +961,22 @@ extension WatchConnection: CBPeripheralDelegate {
         initDispatched = true
         switch kind {
         case .hybridHR, .unknown:
-            if KeychainStore.loadKey(for: peripheral.identifier) != nil {
+            let hasKey = KeychainStore.loadKey(for: peripheral.identifier) != nil
+            // A watch stuck in a watchface reboot loop is only reachable for a
+            // few seconds per cycle, and init would spend them on the (often
+            // failing) auth handshake. Rescue first, unauthenticated; only
+            // proceed to init once it has actually cleared the faces.
+            if WatchfaceRescue.isArmed {
+                Task {
+                    await self.runWatchfaceRescue()
+                    guard !WatchfaceRescue.isArmed else { return }
+                    if hasKey {
+                        await self.initializeWatch()
+                    } else {
+                        NotificationCenter.default.post(name: .watchNeedsAuthKey, object: nil)
+                    }
+                }
+            } else if hasKey {
                 Task { await self.initializeWatch() }
             } else {
                 NotificationCenter.default.post(name: .watchNeedsAuthKey, object: nil)
@@ -1050,6 +1091,11 @@ extension WatchConnection: CBPeripheralDelegate {
         }
         if characteristic.uuid == FossilUUID.char0004, packetWriteType == .withResponse {
             sendNextPackets()
+        }
+        // A write-only command (factory reset) is done exactly here: the watch
+        // owes it no reply, and this callback is the only proof it went out.
+        if currentRequest?.finishesOnWriteAck == true {
+            finishCurrentRequest()
         }
     }
 

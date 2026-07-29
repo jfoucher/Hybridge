@@ -84,6 +84,11 @@ struct KeyEntryView: View {
                             return
                         }
                         hasStoredKey = true
+                        // Use the new key now: re-run init on a live session,
+                        // or connect if the watch isn't attached. Waiting for
+                        // the next reconnect would leave the user staring at a
+                        // watch that still looks broken.
+                        WatchManager.shared.retryAfterAuthKeyChange(watchID)
                         dismiss()
                     }
                     .disabled(keyText.isEmpty)

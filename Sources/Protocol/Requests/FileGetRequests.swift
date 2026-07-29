@@ -141,8 +141,9 @@ final class FileGetRawRequest: FossilRequest {
         self.init(major: handle.major, minor: handle.minor)
     }
 
-    override var idleTimeout: TimeInterval { 20 }
+    override var idleTimeout: TimeInterval { idleTimeoutOverride ?? 20 }
     override var isBulkTransfer: Bool { true }
+    override var openSessionHandle: UInt16? { UInt16(major) << 8 | UInt16(minor) }
 
     /// Validated file content with the 12-byte header and trailing CRC removed.
     /// `expectedHandle` defaults to the handle this file was fetched from, but
@@ -273,6 +274,41 @@ final class FileLookupRequest: FossilRequest {
         } else if uuid == FossilUUID.char0004 {
             try receiver.append(packet: value, context: "file lookup")
         }
+    }
+}
+
+/// Closes (aborts) a file session: -> [09][handle u16], <- type 9 + handle +
+/// status (GB: FileCloseRequest, which its old adapter always sends before a
+/// put). A transfer that dies without its close leaves the watch's file socket
+/// open, and every following open on any handle then answers "socket busy" —
+/// or, as seen on a watch whose watchface engine is crash-looping, nothing at
+/// all. This is the way back out of that state.
+final class FileCloseRequest: FossilRequest {
+    let handle: UInt16
+
+    init(handle: UInt16) {
+        self.handle = handle
+    }
+
+    override var idleTimeout: TimeInterval { idleTimeoutOverride ?? 6 }
+
+    override func startData() throws -> Data {
+        var data = Data([0x09])
+        data.appendUInt16LE(handle)
+        return data
+    }
+
+    override func handle(uuid: CBUUID, value: Data, io: RequestIO) throws {
+        guard uuid == FossilUUID.char0003, value.count == 4,
+              value.u8(at: 0) & 0x0F == 9 else { return }
+        guard value.u16LE(at: 1) == handle else {
+            throw FossilError.unexpectedResponse("file close reply for wrong handle")
+        }
+        let status = value.u8(at: 3)
+        guard FossilResultCode.isSuccess(status) else {
+            throw FossilError.resultCode(status, context: "file close")
+        }
+        isFinished = true
     }
 }
 

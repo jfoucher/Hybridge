@@ -127,9 +127,11 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
         // `.private` so they are redacted in the *persisted* unified log
         // (Console.app, sysdiagnose); the in-app log screen, which the user
         // opens deliberately, still shows the full text from `self.log`.
-        logger.info("\(text, privacy: .private)")
         // Attribute the line to a watch by name once there's more than one, so
-        // a fleet log is readable.
+        // a fleet log is readable. The attribution goes into the unified log
+        // too, not only the in-app buffer: with two watches connected, the
+        // Xcode/Console view is otherwise two interleaved sequences with no way
+        // to tell which watch answered what.
         let roster = WatchRegistry.knownWatchesSync()
         let display: String
         if roster.count > 1, let watchID,
@@ -138,6 +140,12 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
         } else {
             display = text
         }
+        // Payload hex dumps can carry sensitive bytes (auth-handshake frames,
+        // body metrics, contact names in notification filters). Log at
+        // `.private` so they are redacted in the *persisted* unified log
+        // (Console.app, sysdiagnose); the in-app log screen, which the user
+        // opens deliberately, still shows the full text from `self.log`.
+        logger.info("\(display, privacy: .private)")
         DispatchQueue.main.async {
             self.log.append(LogEntry(text: display, watchID: watchID))
             if self.log.count > 800 {
@@ -385,6 +393,21 @@ final class WatchFleet: NSObject, ObservableObject, @unchecked Sendable {
             // A pending connect never times out — it fires whenever the watch
             // comes into range, which is what keeps us auto-attached.
             central.connect(peripheral, options: nil)
+        }
+    }
+
+    /// A watch's auth key was entered or replaced: act on it right away rather
+    /// than waiting for the next reconnect. A watch with a live session re-runs
+    /// init (the previous key may have failed authentication mid-session); one
+    /// that is detached — or that the user transiently disconnected while
+    /// hunting for the key — gets a fresh connect. A sticky park still wins:
+    /// `connectLocked` honours `FleetConnectPolicy`.
+    func retryAfterAuthKeyChange(id: UUID) {
+        bleQueue.async {
+            let connection = self.ensureConnection(for: id)
+            connection.userWantsConnection = true
+            guard !connection.retryInitWithNewKey() else { return }
+            self.connectLocked(id: id)
         }
     }
 
