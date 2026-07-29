@@ -1,0 +1,293 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#moon",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 102,
+      "top": 40
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 116,
+      "top": 10
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M4,0 a4,4 0 1,1 0,8 a4,4 0 1,1 0,-8 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 4,
+        "centerY": 48,
+        "rotation": "#daterot"
+      }
+    }
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 117,
+      "top": 27
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M3,0 a3,3 0 1,1 0,6 a3,3 0 1,1 0,-6 Z",
+        "color": 2,
+        "scale": 1,
+        "centerX": 3,
+        "centerY": 34,
+        "rotation": "#dowrot"
+      }
+    }
+  },
+  {
+    "id": 5,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 180,
+      "top": 116
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H3 V40 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 34,
+        "rotation": "#steprot"
+      }
+    }
+  },
+  {
+    "id": 6,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 180,
+      "top": 130
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H3 V24 H0 Z",
+        "color": 2,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 20,
+        "rotation": "#actrot"
+      }
+    }
+  },
+  {
+    "id": 7,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 56,
+      "top": 120
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H3 V36 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 30,
+        "rotation": "#hrrot"
+      }
+    }
+  },
+  {
+    "id": 8,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 118,
+      "top": 186
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H3 V20 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 16,
+        "rotation": "#monrot"
+      }
+    }
+  },
+  {
+    "id": 9,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 44,
+      "top": 64
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H3 V22 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 18,
+        "rotation": "#temprot"
+      }
+    }
+  },
+  {
+    "id": 10,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 192,
+      "top": 64
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H3 V22 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 18,
+        "rotation": "#uvrot"
+      }
+    }
+  },
+  {
+    "id": 11,
+    "parent_id": 0,
+    "type": "arc",
+    "color": 3,
+    "is_filled": false,
+    "placement": {
+      "type": "absolute"
+    },
+    "arc_info": {
+      "center_x": 120,
+      "center_y": 120,
+      "radius": 116,
+      "border_width": 4,
+      "start_angle": 90,
+      "end_angle": "#rarc"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 12,
+    "parent_id": 0,
+    "type": "arc",
+    "color": 3,
+    "is_filled": false,
+    "placement": {
+      "type": "absolute"
+    },
+    "arc_info": {
+      "center_x": 120,
+      "center_y": 120,
+      "radius": 116,
+      "border_width": 4,
+      "start_angle": 30,
+      "end_angle": "#karc"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 13,
+    "parent_id": 0,
+    "type": "arc",
+    "color": 3,
+    "is_filled": false,
+    "placement": {
+      "type": "absolute"
+    },
+    "arc_info": {
+      "center_x": 120,
+      "center_y": 120,
+      "radius": 116,
+      "border_width": 4,
+      "start_angle": 210,
+      "end_angle": "#barc"
+    },
+    "visible": true,
+    "inversion": false
+  }
+]

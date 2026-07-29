@@ -1,0 +1,125 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 120,
+      "height": 34
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 20,
+      "top": 52
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 2,
+    "type": "text",
+    "text": "#dow",
+    "ppem": 30,
+    "ascent": 22,
+    "descent": 6,
+    "color": 3,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 96,
+      "height": 60
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 130,
+      "top": 150
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 5,
+    "parent_id": 4,
+    "type": "text",
+    "text": "#date",
+    "ppem": 54,
+    "ascent": 39,
+    "descent": 11,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 6,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#steps",
+    "ppem": 14,
+    "color": 0,
+    "is_translate": false,
+    "dimension": {
+      "type": "rigid",
+      "width": 120,
+      "height": 24
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 56,
+      "top": 214
+    },
+    "visible": true,
+    "inversion": false
+  }
+]

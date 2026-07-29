@@ -1,0 +1,151 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "solid",
+    "color": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": "#sw",
+      "height": 14
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 46,
+      "top": 86
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 0,
+    "type": "solid",
+    "color": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": "#aw",
+      "height": 14
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 46,
+      "top": 158
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "solid",
+    "color": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": "#bw",
+      "height": 14
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 46,
+      "top": 190
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 5,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#sv",
+    "ppem": 20,
+    "color": 0,
+    "is_translate": false,
+    "dimension": {
+      "type": "rigid",
+      "width": 74,
+      "height": 24
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 150,
+      "top": 80
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 6,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#av",
+    "ppem": 16,
+    "color": 0,
+    "is_translate": false,
+    "dimension": {
+      "type": "rigid",
+      "width": 74,
+      "height": 24
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 150,
+      "top": 152
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 7,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#bv",
+    "ppem": 16,
+    "color": 0,
+    "is_translate": false,
+    "dimension": {
+      "type": "rigid",
+      "width": 74,
+      "height": 24
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 150,
+      "top": 184
+    },
+    "visible": true,
+    "inversion": false
+  }
+]

@@ -1,0 +1,1 @@
+{"version": "1.0.2.1", "identifier": "ttyFace", "display_name": "TTY", "description": "Terminal readout: scanlines and prompt lines for date, steps, kcal, BPM and battery.", "layout_name": "tty_layout"}

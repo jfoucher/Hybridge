@@ -1,0 +1,158 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "solid",
+    "color": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 34,
+      "height": "#bh"
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 152,
+      "top": "#btop"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 72,
+      "height": 36
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 96,
+      "top": 28
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 4,
+    "parent_id": 3,
+    "type": "text",
+    "text": "#date",
+    "ppem": 32,
+    "ascent": 21,
+    "descent": 5,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 5,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 70,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 45,
+      "top": 165
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 6,
+    "parent_id": 5,
+    "type": "text",
+    "text": "#steps",
+    "ppem": 17,
+    "ascent": 11,
+    "descent": 3,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 7,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 60,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 140,
+      "top": 173
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 8,
+    "parent_id": 7,
+    "type": "text",
+    "text": "#kcal",
+    "ppem": 17,
+    "ascent": 11,
+    "descent": 3,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  }
+]

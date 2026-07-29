@@ -1,0 +1,140 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 100,
+      "height": 20
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 70,
+      "top": 16
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 2,
+    "type": "text",
+    "text": "#date",
+    "ppem": 17,
+    "ascent": 11,
+    "descent": 3,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 60,
+      "height": 16
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 40,
+      "top": 38
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 5,
+    "parent_id": 4,
+    "type": "text",
+    "text": "#mem",
+    "ppem": 16,
+    "ascent": 10,
+    "descent": 3,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 6,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 150,
+      "height": 32
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 45,
+      "top": 54
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 7,
+    "parent_id": 6,
+    "type": "text",
+    "text": "#lcd",
+    "ppem": 30,
+    "ascent": 20,
+    "descent": 4,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  }
+]

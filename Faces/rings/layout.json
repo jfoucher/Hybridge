@@ -1,0 +1,200 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "arc",
+    "color": 3,
+    "is_filled": false,
+    "placement": {
+      "type": "absolute"
+    },
+    "arc_info": {
+      "center_x": 120,
+      "center_y": 120,
+      "radius": 100,
+      "border_width": 10,
+      "start_angle": 14,
+      "end_angle": "#sarc"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 0,
+    "type": "arc",
+    "color": 2,
+    "is_filled": false,
+    "placement": {
+      "type": "absolute"
+    },
+    "arc_info": {
+      "center_x": 120,
+      "center_y": 120,
+      "radius": 84,
+      "border_width": 10,
+      "start_angle": 14,
+      "end_angle": "#barc"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "arc",
+    "color": 3,
+    "is_filled": false,
+    "placement": {
+      "type": "absolute"
+    },
+    "arc_info": {
+      "center_x": 120,
+      "center_y": 120,
+      "radius": 68,
+      "border_width": 10,
+      "start_angle": 14,
+      "end_angle": "#aarc"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 5,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 110,
+      "height": 30
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 65,
+      "top": 72
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 6,
+    "parent_id": 5,
+    "type": "text",
+    "text": "#steps",
+    "ppem": 28,
+    "ascent": 18,
+    "descent": 4,
+    "color": 3,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 7,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 56,
+      "height": 24
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 60,
+      "top": 138
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 8,
+    "parent_id": 7,
+    "type": "text",
+    "text": "#batt",
+    "ppem": 20,
+    "ascent": 13,
+    "descent": 3,
+    "color": 3,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 9,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 56,
+      "height": 24
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 124,
+      "top": 138
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 10,
+    "parent_id": 9,
+    "type": "text",
+    "text": "#act",
+    "ppem": 20,
+    "ascent": 13,
+    "descent": 3,
+    "color": 3,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  }
+]

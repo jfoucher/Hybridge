@@ -1,0 +1,250 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#moon",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 102,
+      "top": 34
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 166,
+      "top": 52
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H4 V24 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 20,
+        "rotation": "#dowrot"
+      }
+    }
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 186,
+      "top": 100
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H4 V24 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 20,
+        "rotation": "#daterot"
+      }
+    }
+  },
+  {
+    "id": 5,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 166,
+      "top": 148
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H4 V24 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 20,
+        "rotation": "#hrrot"
+      }
+    }
+  },
+  {
+    "id": 6,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 118,
+      "top": 168
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H4 V24 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 20,
+        "rotation": "#rot24"
+      }
+    }
+  },
+  {
+    "id": 7,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 70,
+      "top": 148
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H4 V24 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 20,
+        "rotation": "#actrot"
+      }
+    }
+  },
+  {
+    "id": 8,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 50,
+      "top": 100
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H4 V24 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 20,
+        "rotation": "#steprot"
+      }
+    }
+  },
+  {
+    "id": 9,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 70,
+      "top": 52
+    },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M0,0 H4 V24 H0 Z",
+        "color": 3,
+        "scale": 1,
+        "centerX": 2,
+        "centerY": 20,
+        "rotation": "#monrot"
+      }
+    }
+  },
+  {
+    "id": 10,
+    "parent_id": 0,
+    "type": "arc",
+    "color": 3,
+    "is_filled": false,
+    "placement": {
+      "type": "absolute"
+    },
+    "arc_info": {
+      "center_x": 120,
+      "center_y": 120,
+      "radius": 116,
+      "border_width": 3,
+      "start_angle": 30,
+      "end_angle": "#karc"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 11,
+    "parent_id": 0,
+    "type": "arc",
+    "color": 3,
+    "is_filled": false,
+    "placement": {
+      "type": "absolute"
+    },
+    "arc_info": {
+      "center_x": 120,
+      "center_y": 120,
+      "radius": 116,
+      "border_width": 3,
+      "start_angle": 210,
+      "end_angle": "#barc"
+    },
+    "visible": true,
+    "inversion": false
+  }
+]

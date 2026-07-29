@@ -1,0 +1,1 @@
+{"version": "1.0.0.1", "identifier": "radarFace", "display_name": "Radar", "description": "Range rings and a sweep hand that tracks the minute, over a steps and BPM HUD.", "layout_name": "radar_layout"}

@@ -1,0 +1,279 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "mark",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": "#mx",
+      "top": 72
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#d0",
+    "ppem": 17,
+    "color": 3,
+    "placement": {
+      "type": "absolute",
+      "left": 24,
+      "top": 90
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#d1",
+    "ppem": 17,
+    "color": 3,
+    "placement": {
+      "type": "absolute",
+      "left": 53,
+      "top": 90
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 5,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#d2",
+    "ppem": 17,
+    "color": 3,
+    "placement": {
+      "type": "absolute",
+      "left": 82,
+      "top": 90
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 6,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#d3",
+    "ppem": 17,
+    "color": 3,
+    "placement": {
+      "type": "absolute",
+      "left": 111,
+      "top": 90
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 7,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#d4",
+    "ppem": 17,
+    "color": 3,
+    "placement": {
+      "type": "absolute",
+      "left": 140,
+      "top": 90
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 8,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#d5",
+    "ppem": 17,
+    "color": 3,
+    "placement": {
+      "type": "absolute",
+      "left": 169,
+      "top": 90
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 9,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#d6",
+    "ppem": 17,
+    "color": 3,
+    "placement": {
+      "type": "absolute",
+      "left": 198,
+      "top": 90
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 10,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 160,
+      "height": 18
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 40,
+      "top": 30
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 11,
+    "parent_id": 10,
+    "type": "text",
+    "text": "#month",
+    "ppem": 14,
+    "ascent": 10,
+    "descent": 3,
+    "color": 2,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 12,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 150,
+      "height": 30
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 45,
+      "top": 140
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 13,
+    "parent_id": 12,
+    "type": "text",
+    "text": "#week",
+    "ppem": 26,
+    "ascent": 18,
+    "descent": 4,
+    "color": 3,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 14,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 180,
+      "height": 16
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 30,
+      "top": 176
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 15,
+    "parent_id": 14,
+    "type": "text",
+    "text": "#doy",
+    "ppem": 12,
+    "ascent": 9,
+    "descent": 2,
+    "color": 2,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 16,
+    "parent_id": 0,
+    "type": "arc",
+    "color": 3,
+    "is_filled": false,
+    "placement": {
+      "type": "absolute"
+    },
+    "arc_info": {
+      "center_x": 120,
+      "center_y": 120,
+      "radius": 112,
+      "border_width": 4,
+      "start_angle": 0,
+      "end_angle": "#yarc"
+    },
+    "visible": true,
+    "inversion": false
+  }
+]

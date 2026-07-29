@@ -1,0 +1,1 @@
+{"version": "1.0.2.1", "identifier": "pulseFace", "display_name": "Pulse", "description": "Live heart rate over an ECG trace, with weekday, date, steps and calories.", "layout_name": "pulse_layout"}

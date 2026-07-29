@@ -135,7 +135,7 @@ MIT — see [`LICENSE`](LICENSE). © 2026 Jonathan Foucher.
   assets are included, so no AGPL obligation attaches — the nod is a good-faith
   credit to the work that made this possible.
 - **Bundled watchfaces** (`Resources/bundled_faces/`) are author-original,
-  built with this project's own `moon-watch` pipeline.
+  built by this project's own face pipeline in `Faces/`.
 
 Full notices in [`THIRD-PARTY.md`](THIRD-PARTY.md).
 

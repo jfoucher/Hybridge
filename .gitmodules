@@ -1,0 +1,6 @@
+[submodule "Faces/vendor/jerryscript"]
+	path = Faces/vendor/jerryscript
+	url = https://github.com/jerryscript-project/jerryscript.git
+[submodule "Faces/vendor/Fossil-HR-SDK"]
+	path = Faces/vendor/Fossil-HR-SDK
+	url = https://github.com/dakhnod/Fossil-HR-SDK.git

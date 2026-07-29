@@ -1,0 +1,140 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#l1",
+    "ppem": 17,
+    "color": 3,
+    "is_translate": false,
+    "dimension": {
+      "type": "rigid",
+      "width": 160,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 44,
+      "top": 62
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#l2",
+    "ppem": 17,
+    "color": 3,
+    "is_translate": false,
+    "dimension": {
+      "type": "rigid",
+      "width": 160,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 44,
+      "top": 86
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#l3",
+    "ppem": 17,
+    "color": 3,
+    "is_translate": false,
+    "dimension": {
+      "type": "rigid",
+      "width": 160,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 44,
+      "top": 156
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 5,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#l4",
+    "ppem": 17,
+    "color": 3,
+    "is_translate": false,
+    "dimension": {
+      "type": "rigid",
+      "width": 160,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 44,
+      "top": 176
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 6,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#l5",
+    "ppem": 17,
+    "color": 3,
+    "is_translate": false,
+    "dimension": {
+      "type": "rigid",
+      "width": 160,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 44,
+      "top": 196
+    },
+    "visible": true,
+    "inversion": false
+  }
+]

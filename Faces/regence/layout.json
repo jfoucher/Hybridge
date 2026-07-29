@@ -1,0 +1,90 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": { "type": "rigid", "width": 240, "height": 240 },
+    "placement": { "type": "absolute", "left": 0, "top": 0 },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "draw_mode": 1,
+    "placement": { "type": "absolute", "left": 0, "top": 0 },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#moon",
+    "draw_mode": 1,
+    "placement": { "type": "absolute", "left": 135, "top": 24 },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": { "type": "absolute", "left": 40, "top": -38 },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M2.2,66 H3.8 V12 H2.2 Z",
+        "color": 4,
+        "scale": 1,
+        "centerX": 3,
+        "centerY": 72,
+        "rotation": "#mon"
+      }
+    }
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": { "type": "absolute", "left": 116, "top": 128 },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M3,48 H5 V10 H3 Z",
+        "color": 4,
+        "scale": 1,
+        "centerX": 4,
+        "centerY": 54,
+        "rotation": "#dat"
+      }
+    }
+  },
+  {
+    "id": 5,
+    "parent_id": 0,
+    "type": "svg_image",
+    "draw_mode": 1,
+    "placement": { "type": "absolute", "left": 179, "top": 98 },
+    "visible": true,
+    "inversion": false,
+    "svg_format": {
+      "path": {
+        "d": "M5,0 a44,44 0 0 1 4,24 a4.5,4.5 0 1 0 -8,0 a44,44 0 0 1 4,-24 Z",
+        "color": 4,
+        "scale": 1,
+        "centerX": 5,
+        "centerY": 24,
+        "rotation": "#dow"
+      }
+    }
+  }
+]

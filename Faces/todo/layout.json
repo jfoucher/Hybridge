@@ -1,0 +1,301 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#c1",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 24,
+      "top": 56
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#c2",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 24,
+      "top": 86
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#c3",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 24,
+      "top": 146
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 5,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#c4",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 24,
+      "top": 176
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 6,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 56,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 152,
+      "top": 55
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 7,
+    "parent_id": 6,
+    "type": "text",
+    "text": "#v1",
+    "ppem": 17,
+    "ascent": 11,
+    "descent": 3,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 8,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 56,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 152,
+      "top": 85
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 9,
+    "parent_id": 8,
+    "type": "text",
+    "text": "#v2",
+    "ppem": 17,
+    "ascent": 11,
+    "descent": 3,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 10,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 56,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 152,
+      "top": 145
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 11,
+    "parent_id": 10,
+    "type": "text",
+    "text": "#v3",
+    "ppem": 17,
+    "ascent": 11,
+    "descent": 3,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 12,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 56,
+      "height": 22
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 152,
+      "top": 175
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 13,
+    "parent_id": 12,
+    "type": "text",
+    "text": "#v4",
+    "ppem": 17,
+    "ascent": 11,
+    "descent": 3,
+    "color": 0,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 14,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#gg0",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": "#gx0",
+      "top": 54
+    },
+    "visible": "#gv0",
+    "inversion": false
+  },
+  {
+    "id": 15,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#gg1",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": "#gx1",
+      "top": 54
+    },
+    "visible": "#gv1",
+    "inversion": false
+  },
+  {
+    "id": 16,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#gg2",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": "#gx2",
+      "top": 54
+    },
+    "visible": "#gv2",
+    "inversion": false
+  },
+  {
+    "id": 17,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#gg3",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": "#gx3",
+      "top": 54
+    },
+    "visible": "#gv3",
+    "inversion": false
+  },
+  {
+    "id": 18,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#gg4",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": "#gx4",
+      "top": 54
+    },
+    "visible": "#gv4",
+    "inversion": false
+  }
+]

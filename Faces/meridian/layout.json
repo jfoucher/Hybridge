@@ -1,0 +1,237 @@
+[
+  {
+    "id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 0,
+    "cross_alignment": 0,
+    "dimension": {
+      "type": "rigid",
+      "width": 240,
+      "height": 240
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 1,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "background",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 0,
+      "top": 0
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 2,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 200,
+      "height": 18
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 20,
+      "top": 34
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 3,
+    "parent_id": 2,
+    "type": "text",
+    "text": "#date",
+    "ppem": 13,
+    "ascent": 9,
+    "descent": 3,
+    "color": 2,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 4,
+    "parent_id": 0,
+    "type": "container",
+    "direction": 0,
+    "main_alignment": 1,
+    "cross_alignment": 1,
+    "dimension": {
+      "type": "rigid",
+      "width": 150,
+      "height": 34
+    },
+    "placement": {
+      "type": "absolute",
+      "left": 45,
+      "top": 56
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 5,
+    "parent_id": 4,
+    "type": "text",
+    "text": "#ltime",
+    "ppem": 32,
+    "ascent": 22,
+    "descent": 5,
+    "color": 3,
+    "placement": {
+      "type": "relative"
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 6,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#l1",
+    "ppem": 15,
+    "color": 2,
+    "placement": {
+      "type": "absolute",
+      "left": 56,
+      "top": 153
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 7,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#t1",
+    "ppem": 15,
+    "color": 3,
+    "placement": {
+      "type": "absolute",
+      "left": 104,
+      "top": 153
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 8,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#i1",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 172,
+      "top": 143
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 9,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#l2",
+    "ppem": 15,
+    "color": 2,
+    "placement": {
+      "type": "absolute",
+      "left": 56,
+      "top": 175
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 10,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#t2",
+    "ppem": 15,
+    "color": 3,
+    "placement": {
+      "type": "absolute",
+      "left": 104,
+      "top": 175
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 11,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#i2",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 172,
+      "top": 165
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 12,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#l3",
+    "ppem": 15,
+    "color": 2,
+    "placement": {
+      "type": "absolute",
+      "left": 56,
+      "top": 197
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 13,
+    "parent_id": 0,
+    "type": "text",
+    "text": "#t3",
+    "ppem": 15,
+    "color": 3,
+    "placement": {
+      "type": "absolute",
+      "left": 104,
+      "top": 197
+    },
+    "visible": true,
+    "inversion": false
+  },
+  {
+    "id": 14,
+    "parent_id": 0,
+    "type": "image",
+    "image_name": "#i3",
+    "draw_mode": 1,
+    "placement": {
+      "type": "absolute",
+      "left": 172,
+      "top": 187
+    },
+    "visible": true,
+    "inversion": false
+  }
+]
