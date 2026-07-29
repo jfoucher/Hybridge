@@ -65,10 +65,10 @@ return {
 	"dow_angle": function (w) {
 		return w * (360.0 / 7.0);
 	},
-	// power reserve between 7 and 8: battery across a 45 deg sector
+	// power reserve between 7 and 8: battery across a 60 deg sector
 	// centred on that gauge's own 12 (must match gen_assets.py)
 	"pwr_angle": function (soc) {
-		return (soc / 100.0 - 0.5) * 45.0;
+		return (soc / 100.0 - 0.5) * 60.0;
 	},
 
 	"compute": function () {

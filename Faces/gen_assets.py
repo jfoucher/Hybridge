@@ -1632,9 +1632,14 @@ REG_DATE_R = 52              # date label radius (about that centre)
 # the old 120 deg fan could not go.  Searched against the real ink of the
 # other dials rather than a bounding disc: it clears them by 8px and
 # reaches r=112.6 of the 118 dial.
-REG_PWR_CENTER = (41, 192)   # power-reserve pivot, at the foot of the gauge
-REG_PWR_R = 76               # graduation radius (about that pivot)
-REG_PWR_SPAN = 45            # sector the needle sweeps, centred on local 12
+# Widening the sweep without moving the scale pins these three together:
+# the arc's width is the chord 2*R*sin(span/2), so holding it at 58 while
+# the span went 45 -> 60 forced R 76 -> 58, and the pivot then had to rise
+# by exactly that difference (192 -> 174) to leave the top of the arc where
+# it was, at (41,116).  Change any one of them and the other two follow.
+REG_PWR_CENTER = (41, 174)   # power-reserve pivot, at the foot of the gauge
+REG_PWR_R = 58               # graduation radius (about that pivot)
+REG_PWR_SPAN = 60            # sector the needle sweeps, centred on local 12
 # E/F rather than 0/100: it is what retro and reptile already label a
 # battery gauge with, it matches this dial's own single-serif-letter
 # language, and at the 14pt floor "100" would not fit inside the scale.

@@ -92,16 +92,16 @@
     "parent_id": 0,
     "type": "svg_image",
     "draw_mode": 1,
-    "placement": { "type": "absolute", "left": 36, "top": 126 },
+    "placement": { "type": "absolute", "left": 37, "top": 126 },
     "visible": true,
     "inversion": false,
     "svg_format": {
       "path": {
-        "d": "M1.5,66 H8.5 a2000,2000 0 0 1 -3.5,-66 a2000,2000 0 0 1 -3.5,66 Z",
+        "d": "M1.5,48 H6.5 a2000,2000 0 0 1 -2.5,-48 a2000,2000 0 0 1 -2.5,48 Z",
         "color": 4,
         "scale": 1,
-        "centerX": 5,
-        "centerY": 66,
+        "centerX": 4,
+        "centerY": 48,
         "rotation": "#pwr"
       }
     }
