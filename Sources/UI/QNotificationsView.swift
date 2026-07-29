@@ -307,7 +307,9 @@ private struct QAddAppView: View {
     @State private var query = ""
     @State private var results: [AppStoreSearch.Result] = []
     @State private var searching = false
-    @State private var searchFailed = false
+    /// Footer note replacing the hint after a search: the underlying error (so
+    /// a failure is diagnosable from the device) or a no-results notice.
+    @State private var searchNote: String?
     @State private var bundleId = ""
     @State private var displayName = ""
 
@@ -351,9 +353,7 @@ private struct QAddAppView: View {
                 } header: {
                     Text("Search the App Store")
                 } footer: {
-                    Text(searchFailed
-                         ? String(localized: "Search failed — check the internet connection, or enter the bundle ID manually below.")
-                         : String(localized: "Looks up the bundle ID for you."))
+                    Text(searchNote ?? String(localized: "Looks up the bundle ID for you."))
                 }
 
                 Section("App") {
@@ -390,17 +390,21 @@ private struct QAddAppView: View {
         let term = query.trimmingCharacters(in: .whitespaces)
         guard !term.isEmpty, !searching else { return }
         searching = true
-        searchFailed = false
+        searchNote = nil
         Task {
             do {
                 let found = try await AppStoreSearch.search(term)
                 await MainActor.run {
                     results = found
+                    searchNote = found.isEmpty
+                        ? String(localized: "No matching apps — enter the bundle ID manually below.")
+                        : nil
                     searching = false
                 }
             } catch {
                 await MainActor.run {
-                    searchFailed = true
+                    searchNote = String(
+                        localized: "Search failed: \(error.localizedDescription) — enter the bundle ID manually below.")
                     searching = false
                 }
             }

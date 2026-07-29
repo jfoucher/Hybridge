@@ -9,6 +9,40 @@ enum CarouselItem: Hashable {
     case add
 }
 
+private enum CardLayout {
+    /// Minimum height of the name band. Every card's name is one line, so
+    /// reserving it keeps the heroes on the same line across cards; the band
+    /// still grows past it when Dynamic Type makes the name taller.
+    static let nameBand: CGFloat = 50
+    static let hero: CGFloat = 230
+    /// First-frame guess only — the real height is measured (`CardHeightKey`).
+    static let estimate: CGFloat = nameBand + hero + 111
+}
+
+/// Height of the tallest card. The cards are laid out at that height so the
+/// page below never shifts while swiping, and so each band (name, hero,
+/// caption, pills) stays on the same line across neighbouring cards mid-drag.
+///
+/// Measured rather than hard-coded: every band below the hero is text, so its
+/// real height depends on the locale, the font and the user's Dynamic Type
+/// setting. A hard-coded box either clipped what overflowed it (the scroll
+/// view clips) or left a lot of dead space at accessibility text sizes.
+private struct CardHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+private extension View {
+    /// Reports this view's natural height as the card-height preference.
+    func measuringCardHeight() -> some View {
+        background(GeometryReader { geo in
+            Color.clear.preference(key: CardHeightKey.self, value: geo.size.height)
+        })
+    }
+}
+
 /// Swipeable hero replacing the old header Menu switcher (audit finding M6):
 /// watches ordered first-added → last, both neighbors partially visible so
 /// the swipe is discoverable, and a full swipe activates the next watch via
@@ -17,13 +51,21 @@ enum CarouselItem: Hashable {
 /// neighbor scrolls it to center instead of switching immediately. The
 /// trailing "+" card starts the existing add-watch scan flow.
 ///
+/// Each card carries its watch's *own* name, face name, family, connection
+/// pill, battery, Locate button and last-sync line — read from that watch's
+/// `WatchConnection` rather than the `WatchManager` facade, which only ever
+/// mirrors the active watch. They live inside the scroll content so they
+/// travel with the swipe instead of snapping over once the switch commits
+/// (~350 ms after the drag settles).
+///
 /// `scrolledItem` is owned by the parent (`DashboardView`) rather than kept
 /// internal: the dashboard needs to know when the carousel is parked on the
-/// "Add a watch" card so it can hide the face-name/kind caption and the
-/// connection glance, which describe the previous *watch*, not the add flow.
+/// "Add a watch" card so it can hide the transfer progress, which describes
+/// the previous *watch*, not the add flow.
 struct WatchCarousel: View {
     @EnvironmentObject var watch: WatchManager
     @EnvironmentObject var registry: WatchRegistry
+    @StateObject private var fitness = FitnessStore.shared
     @Binding var scrolledItem: CarouselItem?
 
     @State private var managingWatch: KnownWatch?
@@ -36,9 +78,11 @@ struct WatchCarousel: View {
     // watch's), not its own.
     @State private var pinnedSkinStores: [UUID: WatchSkinStore] = [:]
 
-    private let peekInset: CGFloat = 40
+    private let peekInset: CGFloat = 34
     private let cardSpacing: CGFloat = 14
-    private let cardHeight: CGFloat = 258
+    /// The tallest card, measured from the cards themselves; the initial
+    /// value only has to carry the very first frame.
+    @State private var cardHeight: CGFloat = CardLayout.estimate
 
     var body: some View {
         VStack(spacing: 10) {
@@ -56,13 +100,15 @@ struct WatchCarousel: View {
                             WatchCard(known: known,
                                       isActive: isActive,
                                       face: watch.watchfacePreviewImage(for: known.id),
-                                      skin: isActive ? WatchSkinStore.shared : pinnedSkinStore(for: known.id))
-                                .frame(width: cardWidth)
+                                      skin: isActive ? WatchSkinStore.shared : pinnedSkinStore(for: known.id),
+                                      connection: watch.fleet.ensureConnection(for: known.id),
+                                      lastSync: fitness.lastSync(for: known.id))
+                                .frame(width: cardWidth, height: cardHeight, alignment: .top)
                                 .id(CarouselItem.watch(known.id))
                                 .onTapGesture { handleTap(on: known) }
                         }
                         AddWatchCard()
-                            .frame(width: cardWidth)
+                            .frame(width: cardWidth, height: cardHeight, alignment: .top)
                             .id(CarouselItem.add)
                             .onTapGesture { showAddSheet = true }
                     }
@@ -73,6 +119,10 @@ struct WatchCarousel: View {
                 .contentMargins(.horizontal, peekInset, for: .scrollContent)
             }
             .frame(height: cardHeight)
+            .onPreferenceChange(CardHeightKey.self) { height in
+                guard height > 0 else { return }
+                Task { @MainActor in cardHeight = height }
+            }
 
             pageDots
         }
@@ -164,25 +214,57 @@ struct WatchCarousel: View {
     }
 }
 
-/// One carousel card: always the real hero render (user skin or the default
-/// drawn mock) with that watch's own dial face — the live downloaded face for
-/// the connected watch, the bundled artwork for every other card (see
-/// `WatchManager.watchfacePreviewImage(for:)`, which keys the face to the
-/// watch id so a switch never flashes the previous watch's face). Peeked
-/// (non-active) cards previously got a dimmed, scaled-down generic mock
-/// instead, but that flickered in as soon as a card was no longer the active
-/// one, including mid-swipe — showing the same real rendering for every card
-/// avoids that.
+/// One carousel card: the watch's name, the real hero render (user skin or
+/// the default drawn mock) with that watch's own dial face — the live
+/// downloaded face for the connected watch, the bundled artwork for every
+/// other card (see `WatchManager.watchfacePreviewImage(for:)`, which keys the
+/// face to the watch id so a switch never flashes the previous watch's face)
+/// — and that watch's glance: face name, family, connection, battery, Locate
+/// and last sync. Peeked (non-active) cards previously got a dimmed,
+/// scaled-down generic mock instead, but that flickered in as soon as a card
+/// was no longer the active one, including mid-swipe — showing the same real
+/// rendering for every card avoids that.
+///
+/// Everything is read from this card's own `WatchConnection`, so a peeked
+/// card shows *its* watch's live state (the fleet keeps every roster watch
+/// connected) rather than the active watch's. Interactive bits are inert
+/// while the card isn't active: a tap anywhere on a peeked card scrolls it to
+/// centre, which is also what makes the actions unambiguous — they always
+/// belong to the watch you're looking at.
 private struct WatchCard: View {
     let known: KnownWatch
     let isActive: Bool
     let face: UIImage?
     let skin: WatchSkinStore
+    @ObservedObject var connection: WatchConnection
+    let lastSync: Date?
+
+    @EnvironmentObject var registry: WatchRegistry
+    @State private var editingName = false
+    @State private var nameDraft = ""
+    @State private var findingWatch = false
+    @State private var pairing = false
+
+    private var kind: WatchKind { known.kind ?? .hybridHR }
+    private var isReady: Bool { connection.connectionState == .ready }
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
+            nameBand
             WatchHeroImage(face: face, skin: skin)
+            faceNameLine
+            Text("Fossil \(kind.displayName)")
+                .font(Theme.sans(15, weight: .medium, relativeTo: .subheadline))
+                .foregroundStyle(Theme.sub)
+                .padding(.top, 4)
+            statusGlance.padding(.top, 14)
         }
+        // Natural height, so the carousel can size every card to the tallest.
+        .measuringCardHeight()
+        // A peeked card is a preview: its buttons and the rename field would
+        // otherwise act on a watch that isn't active yet, and would swallow
+        // the tap that scrolls the card to centre.
+        .allowsHitTesting(isActive)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel(isActive ? String(localized: "\(known.name), active watch")
@@ -190,9 +272,248 @@ private struct WatchCard: View {
         .accessibilityHint(isActive ? String(localized: "Opens watch management")
                                     : String(localized: "Switches to this watch"))
     }
+
+    // MARK: Name
+
+    private var nameBand: some View {
+        Group {
+            if editingName {
+                TextField("Name", text: $nameDraft, onCommit: commitNameEdit)
+                    .font(Theme.serif(32))
+                    .foregroundStyle(Theme.ink)
+                    .multilineTextAlignment(.center)
+                    .submitLabel(.done)
+            } else {
+                Text(known.name)
+                    .font(Theme.serif(40))
+                    .tracking(0.3)
+                    // One line, shrinking to fit, so a long name can't make
+                    // one card taller than its neighbours.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
+                    .foregroundStyle(Theme.ink)
+                    .onTapGesture(perform: beginNameEdit)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        // A floor, not a cap: at large text sizes the name is taller than the
+        // band and must be allowed to grow rather than be clipped.
+        .frame(minHeight: CardLayout.nameBand)
+    }
+
+    private func beginNameEdit() {
+        nameDraft = known.name
+        editingName = true
+    }
+
+    private func commitNameEdit() {
+        defer { editingName = false }
+        let trimmed = nameDraft.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != known.name else { return }
+        registry.rename(known.id, to: trimmed)
+    }
+
+    // MARK: Caption
+
+    /// Face name — HR only; hands-only Q hybrids have none. Rendered
+    /// transparent rather than removed so the caption and pills below sit on
+    /// the same line on every card.
+    private var faceNameLine: some View {
+        Text(kind.hasWatchfaces ? (connection.activeWatchfaceName?.uppercased() ?? "") : "")
+            .font(Theme.mono(12, weight: .medium))
+            .tracking(0.6)
+            .lineLimit(1)
+            .foregroundStyle(Theme.accent)
+            .padding(.top, 2)
+    }
+
+    // MARK: Status glance
+
+    private var statusGlance: some View {
+        // "Synced 5 min ago" ages without anything publishing — tick so the
+        // relative phrasing keeps up on its own.
+        TimelineView(.periodic(from: .now, by: 30)) { _ in
+            VStack(spacing: 8) {
+                // One row, always: the labels shrink to fit (see `pillLabel`)
+                // rather than wrapping onto a second line, which would make
+                // the glance a different height per card and per connection
+                // state. Three pills need ~336pt at full size, more than a
+                // card is wide on a small phone or in a long locale.
+                HStack(spacing: 8) {
+                    connectionPill
+                    if let battery = connection.batteryLevel { batteryPill(battery) }
+                    if isReady { findButton }
+                }
+                // Free to wrap: it's the last line of the card, the card is
+                // sized to whatever it needs, and truncating a "Synced …"
+                // to an ellipsis would be worse than a second line.
+                Text(syncLine)
+                    .font(Theme.sans(12, relativeTo: .caption))
+                    .foregroundStyle(Theme.sub)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var connectionPill: some View {
+        HStack(spacing: 7) {
+            Circle()
+                .fill(connState.dot)
+                .frame(width: 8, height: 8)
+                .overlay(Circle().strokeBorder(connState.halo, lineWidth: 3).scaleEffect(1.75))
+            pillLabel(connState.label)
+                .tracking(0.1)
+                .foregroundStyle(Theme.ink)
+        }
+        .pill()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(connState.label)
+        .onTapGesture { pairingAction?() }
+    }
+
+    private func batteryPill(_ level: Int) -> some View {
+        HStack(spacing: 6) {
+            BatteryGlyph(level: level, fill: batteryColor(level))
+            Text("\(level, format: .percent)")
+                .font(Theme.mono(13, weight: .semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .foregroundStyle(Theme.ink)
+        }
+        .pill()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Battery \(level, format: .percent)")
+    }
+
+    /// Pill text that gives way before the row does: one line, shrinking to
+    /// 75% so three pills always fit side by side.
+    private func pillLabel(_ text: String) -> some View {
+        Text(text)
+            .font(Theme.sans(13, weight: .semibold, relativeTo: .footnote))
+            .lineLimit(1)
+            .minimumScaleFactor(0.75)
+    }
+
+    private func batteryColor(_ level: Int) -> Color {
+        if level <= 15 { return Theme.danger }
+        if level <= 30 { return Theme.warn }
+        return Theme.ink
+    }
+
+    private var findButton: some View {
+        Button {
+            findWatch()
+        } label: {
+            HStack(spacing: 6) {
+                if findingWatch {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                pillLabel(findingWatch ? String(localized: "Vibrating…")
+                                       : String(localized: "Locate"))
+            }
+            .foregroundStyle(Theme.accent)
+        }
+        .buttonStyle(.plain)
+        .pill()
+        .disabled(findingWatch)
+        .accessibilityLabel("Find watch")
+        .accessibilityHint("Vibrates the watch so you can locate it")
+    }
+
+    /// Connection state collapsed to the visual states in the design. An
+    /// out-of-range watch reads as "Disconnected" rather than "Connecting…"
+    /// forever — `WatchConnection` decays a stuck `.connecting` while keeping
+    /// the pending connect armed.
+    private var connState: (dot: Color, halo: Color, label: String) {
+        switch connection.connectionState {
+        case .ready:
+            if connection.isDevicePaired ?? false {
+                return (Theme.success, Theme.success.opacity(0.16), String(localized: "Connected"))
+            }
+            return (Theme.warn, Theme.warn.opacity(0.16), String(localized: "Unpaired"))
+        case .bluetoothOff:
+            return (Theme.warn, Theme.warn.opacity(0.16), String(localized: "Bluetooth off"))
+        case .connecting, .initializing, .authenticating, .scanning:
+            return (Theme.warn, Theme.warn.opacity(0.16), connection.connectionState.label)
+        case .disconnected, .failed:
+            return (Theme.danger, Theme.danger.opacity(0.16), String(localized: "Disconnected"))
+        }
+    }
+
+    private var syncLine: String {
+        guard connection.connectionState != .bluetoothOff else {
+            return String(localized: "Turn on Bluetooth to reconnect")
+        }
+        guard let lastSync else {
+            return String(localized: "Not synced yet")
+        }
+        // Within a minute of syncing, say "now" rather than let
+        // RelativeDateTimeFormatter phrase a sub-second interval as the future
+        // ("in 0 seconds") — it rounds the difference to zero and defaults to
+        // future phrasing.
+        if lastSync.timeIntervalSinceNow > -60 {
+            return String(localized: "Synced now")
+        }
+        let f = RelativeDateTimeFormatter()
+        f.unitsStyle = .short
+        return String(localized: "Synced \(f.localizedString(for: lastSync, relativeTo: Date()))")
+    }
+
+    // MARK: Actions (always this card's watch, never the facade's target)
+
+    private var canManageHardware: Bool { isReady && kind != .misfitQ }
+
+    private var pairingAction: (() -> Void)? {
+        guard canManageHardware, !pairing, !(connection.isDevicePaired ?? false) else { return nil }
+        return { pair() }
+    }
+
+    private func findWatch() {
+        findingWatch = true
+        Task {
+            do {
+                if let confirmed = try await connection.findActiveWatchAndConfirm() {
+                    await MainActor.run {
+                        confirmed
+                            ? ToastCenter.shared.success(
+                                String(localized: "Found — confirmed on the watch"))
+                            : ToastCenter.shared.error(
+                                String(localized: "No response — vibration timed out"))
+                    }
+                }
+            } catch {
+                await MainActor.run { ToastCenter.shared.error(error.localizedDescription) }
+            }
+            await MainActor.run { findingWatch = false }
+        }
+    }
+
+    private func pair() {
+        pairing = true
+        Task {
+            do {
+                try await connection.performDevicePairing()
+                await MainActor.run {
+                    ToastCenter.shared.success(String(localized: "Pairing succeeded"))
+                }
+            } catch {
+                await MainActor.run {
+                    ToastCenter.shared.error(
+                        String(localized: "Pairing: \(error.localizedDescription)"))
+                }
+            }
+            await MainActor.run { pairing = false }
+        }
+    }
 }
 
-/// Trailing carousel card that starts the add-watch scan flow.
+/// Trailing carousel card that starts the add-watch scan flow. Its artwork
+/// occupies the name + hero bands so the "+" lands where the watches do,
+/// with the glance area below left empty.
 private struct AddWatchCard: View {
     var body: some View {
         VStack(spacing: 10) {
@@ -208,11 +529,52 @@ private struct AddWatchCard: View {
                 .font(Theme.sans(14, weight: .medium, relativeTo: .subheadline))
                 .foregroundStyle(Theme.sub)
         }
-        .frame(height: 230)
+        .frame(maxWidth: .infinity)
+        // Centred in the hero band (not the whole card), so the "+" lands
+        // where the watches are rather than drifting up into the name band.
+        .frame(height: CardLayout.hero)
+        .padding(.top, CardLayout.nameBand)
+        .measuringCardHeight()
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Add a watch")
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+// MARK: - Pill styling
+
+private extension View {
+    func pill() -> some View {
+        padding(.vertical, 7)
+            .padding(.horizontal, 13)
+            .background(Capsule().fill(Theme.card))
+            .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 1))
+    }
+}
+
+// MARK: - Battery glyph (outline + level fill), matching the handoff SVG.
+
+private struct BatteryGlyph: View {
+    let level: Int
+    let fill: Color
+
+    var body: some View {
+        // Drawn in the handoff's 26×13 viewBox, then scaled to 22×11.
+        Canvas { ctx, _ in
+            let body = CGRect(x: 1, y: 1, width: 21, height: 11)
+            ctx.stroke(Path(roundedRect: body, cornerRadius: 3.2),
+                       with: .color(Theme.ink.opacity(0.3)), lineWidth: 1)
+            let nub = CGRect(x: 23.4, y: 4.2, width: 1.8, height: 4.6)
+            ctx.fill(Path(roundedRect: nub, cornerRadius: 0.9),
+                     with: .color(Theme.ink.opacity(0.3)))
+            let w = CGFloat(max(0, min(100, level))) / 100 * 17
+            let inner = CGRect(x: 2.8, y: 2.8, width: w, height: 7.4)
+            ctx.fill(Path(roundedRect: inner, cornerRadius: 1.6), with: .color(fill))
+        }
+        .frame(width: 26, height: 13)
+        .scaleEffect(22.0 / 26.0)
+        .frame(width: 22, height: 11)
     }
 }
 

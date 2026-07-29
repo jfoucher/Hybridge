@@ -55,6 +55,15 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
     /// `syncActivityThenPushBaseline()`.
     static let stepBaselineGate = FleetSerialGate()
 
+    /// How long a pending connect is published as `.connecting` before the
+    /// state decays to `.disconnected`. A CoreBluetooth pending connect never
+    /// times out — it fires whenever the watch comes back into range, which is
+    /// exactly what keeps us auto-attached — so an out-of-range watch would
+    /// otherwise read "Connecting…" forever (most visibly right after
+    /// switching to a watch that isn't nearby). The connect itself stays
+    /// armed; only the published state gives up waiting.
+    static let connectingGracePeriod: TimeInterval = 15
+
     /// Stable identity — the peripheral UUID — known before a token exists.
     let watchID: UUID
     /// The fleet that owns the central and created this connection. `unowned`
@@ -126,6 +135,9 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
     private var pendingPackets: [Data] = []
     private var nextPacketIndex = 0
     private var packetWriteType: CBCharacteristicWriteType = .withResponse
+
+    /// Decays a stuck `.connecting` back to `.disconnected` (on bleQueue).
+    private var connectingDecayWorkItem: DispatchWorkItem?
 
     /// Set when the user picks a watch from the scan list, so the next init
     /// triggers the iOS pairing dialog automatically if the watch isn't
@@ -259,8 +271,41 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
         peripheral.delegate = self
     }
 
-    func setConnecting() { DispatchQueue.main.async { self.connectionState = .connecting } }
-    func setInitializing() { DispatchQueue.main.async { self.connectionState = .initializing } }
+    /// Publishes `.connecting` and arms the decay to `.disconnected` — the
+    /// pending connect outlives it and still attaches the moment the watch is
+    /// back in range. On bleQueue.
+    func setConnecting() {
+        DispatchQueue.main.async { self.connectionState = .connecting }
+        armConnectingDecay()
+    }
+
+    func setInitializing() {
+        cancelConnectingDecay()
+        DispatchQueue.main.async { self.connectionState = .initializing }
+    }
+
+    /// On bleQueue. Re-arming cancels any earlier decay, so a new connect
+    /// attempt always gets a full grace period.
+    private func armConnectingDecay() {
+        connectingDecayWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            DispatchQueue.main.async {
+                // Only a still-waiting connect decays: anything that moved on
+                // (initializing, ready, bluetooth off, a re-arm) wins.
+                guard self.connectionState == .connecting else { return }
+                self.connectionState = .disconnected
+            }
+        }
+        connectingDecayWorkItem = item
+        bleQueue.asyncAfter(deadline: .now() + Self.connectingGracePeriod, execute: item)
+    }
+
+    /// On bleQueue.
+    private func cancelConnectingDecay() {
+        connectingDecayWorkItem?.cancel()
+        connectingDecayWorkItem = nil
+    }
 
     /// Bluetooth was turned off: clear the peripheral/session state (the
     /// peripheral iOS handed us is now invalid) but keep `userWantsConnection`
@@ -268,6 +313,7 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
     /// `connectLocked`'s `attachedPeripheral == nil` guard would skip this
     /// watch forever after a Bluetooth off/on cycle. On bleQueue.
     func resetForBluetoothOff() {
+        cancelConnectingDecay()
         failCurrentRequest(FossilError.notConnected)
         invalidateConnectionToken()
         peripheral = nil
@@ -286,6 +332,7 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
 
     /// A fresh connection succeeded — begin service discovery.
     func handleConnected() {
+        cancelConnectingDecay()
         sessionStarted = false
         pendingNotifyChars = []
         DispatchQueue.main.async { self.connectionState = .initializing }
@@ -294,6 +341,7 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
 
     /// The pending connect failed. Clears the peripheral and publishes failure.
     func handleConnectFailed(_ error: Error?) {
+        cancelConnectingDecay()
         peripheral = nil
         invalidateConnectionToken()
         DispatchQueue.main.async {
@@ -304,8 +352,10 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
 
     /// The link dropped. Clears all per-connection state. `reconnecting` (the
     /// fleet's policy decision) chooses the published state — `.connecting`
-    /// while a pending re-connect is armed, else `.disconnected`.
+    /// while a pending re-connect is armed (decaying to `.disconnected` if the
+    /// watch doesn't come back within the grace period), else `.disconnected`.
     func resetForDisconnect(reconnecting: Bool) {
+        if reconnecting { armConnectingDecay() } else { cancelConnectingDecay() }
         failCurrentRequest(FossilError.notConnected)
         invalidateConnectionToken()
         peripheral = nil
@@ -327,6 +377,7 @@ final class WatchConnection: NSObject, ObservableObject, @unchecked Sendable {
     /// is cleared first so a late `didDisconnect` can't re-arm reconnect. The
     /// fleet cancels the actual BLE link (it owns the central).
     func resetForTeardown() {
+        cancelConnectingDecay()
         invalidateConnectionToken()
         userWantsConnection = false
         failCurrentRequest(FossilError.notConnected)

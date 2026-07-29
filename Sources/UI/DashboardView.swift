@@ -1,35 +1,22 @@
 import SwiftUI
 
 /// Watch tab / home screen — "Warm brass" redesign (handoff direction 1a).
-/// The active watch as a product hero, a connection + battery glance, and a
-/// today-at-a-glance card. Degrades for hands-only Q hybrids (no face name).
+/// The active watch as a product hero and a today-at-a-glance card. The
+/// per-watch identity and glance (name, face name, family, connection,
+/// battery, Locate, last sync) live inside `WatchCarousel`'s cards so they
+/// slide with the swipe; only the transfer progress and today's totals —
+/// which aren't per-card — are laid out here.
 struct DashboardView: View {
     @EnvironmentObject var watch: WatchManager
-    @EnvironmentObject var registry: WatchRegistry
     @StateObject private var fitness = FitnessStore.shared
     // The same daily goal Settings writes to the watch.
     @AppStorage("stepGoal") private var stepGoal = 10000
-    @State private var findingWatch = false
-    @State private var editingName = false
-    @State private var nameDraft = ""
-    @State private var connectingSince: Date?
     @State private var carouselItem: CarouselItem?
-    @State private var pairing = false
 
     @Environment(\.floatingTabBarHeight) private var tabBarHeight
 
-    /// A stuck `.connecting` (watch out of range — iOS keeps a pending
-    /// connect alive indefinitely) reads as "Disconnected" after this long,
-    /// rather than showing "Connecting…" forever.
-    private let connectingTimeout: TimeInterval = 60
-
-    private var kind: WatchKind {
-        registry.activeWatch?.kind ?? .hybridHR
-    }
-
-    /// The carousel is parked on the trailing "+" card — the face-name/kind
-    /// caption and connection glance below it describe the previous active
-    /// *watch*, not the add flow, so they'd be misleading here.
+    /// The carousel is parked on the trailing "+" card — a transfer running
+    /// on the previous active *watch* isn't what the add flow is about.
     private var isViewingAddCard: Bool { carouselItem == .add }
 
     var body: some View {
@@ -38,16 +25,20 @@ struct DashboardView: View {
                 Theme.bg.ignoresSafeArea()
 
                 ScrollView(showsIndicators: false) {
+                    // The carousel is deliberately outside the 22pt page
+                    // margin: its cards are already inset by the peek, and the
+                    // extra width is what keeps a card's status pills on one
+                    // line.
                     VStack(spacing: 0) {
-                        header
-                        hero.padding(.top, 10)
+                        WatchCarousel(scrolledItem: $carouselItem)
+                            .padding(.top, 12)
                         if !isViewingAddCard {
-                            statusGlance.padding(.top, 16)
-                            affordances
+                            affordances.padding(.horizontal, 22)
                         }
-                        todaySection.padding(.top, 22)
+                        todaySection
+                            .padding(.top, 22)
+                            .padding(.horizontal, 22)
                     }
-                    .padding(.horizontal, 22)
                     .padding(.bottom, 12 + tabBarHeight)
                     .frame(maxWidth: 760)
                     .frame(maxWidth: .infinity)
@@ -59,154 +50,8 @@ struct DashboardView: View {
             .toolbar(.hidden, for: .navigationBar)
         }
         .tint(Theme.accent)
-        .onChange(of: watch.connectionState, initial: true) { _, state in
-            if state == .connecting {
-                if connectingSince == nil { connectingSince = Date() }
-            } else {
-                connectingSince = nil
-            }
-        }
     }
 
-    // MARK: Header
-
-    private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            if editingName {
-                TextField("Name", text: $nameDraft, onCommit: commitNameEdit)
-                    .font(Theme.serif(32))
-                    .foregroundStyle(Theme.ink)
-                    .submitLabel(.done)
-            } else {
-                Text(registry.activeWatch?.name ?? String(localized: "Watch"))
-                    .font(Theme.serif(40))
-                    .tracking(0.3)
-                    .lineSpacing(0)
-                    .foregroundStyle(Theme.ink)
-                    .frame(maxWidth: 250, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .onTapGesture(perform: beginNameEdit)
-            }
-
-            Spacer(minLength: 0)
-        }
-        .padding(.top, 2)
-    }
-
-    private func beginNameEdit() {
-        guard registry.activeWatchID != nil else { return }
-        nameDraft = registry.activeWatch?.name ?? ""
-        editingName = true
-    }
-
-    private func commitNameEdit() {
-        defer { editingName = false }
-        guard let id = registry.activeWatchID else { return }
-        let trimmed = nameDraft.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        registry.rename(id, to: trimmed)
-    }
-
-    // MARK: Hero
-
-    private var hero: some View {
-        VStack(spacing: 0) {
-            WatchCarousel(scrolledItem: $carouselItem)
-
-            if !isViewingAddCard {
-                // Face name — HR only; hidden for hands-only Q hybrids.
-                if kind.hasWatchfaces, let name = watch.activeWatchfaceName, !name.isEmpty {
-                    Text(name.uppercased())
-                        .font(Theme.mono(12, weight: .medium))
-                        .tracking(0.6)
-                        .foregroundStyle(Theme.accent)
-                        .padding(.top, 2)
-                }
-
-                Text("Fossil \(kind.displayName)")
-                    .font(Theme.sans(15, weight: .medium, relativeTo: .subheadline))
-                    .foregroundStyle(Theme.sub)
-                    .padding(.top, 4)
-            }
-        }
-    }
-
-    // MARK: Status glance
-
-    private var statusGlance: some View {
-        // Periodic tick so a stalled "Connecting…" flips to "Disconnected"
-        // on its own once the timeout elapses, without a state change from
-        // WatchManager to trigger a redraw.
-        TimelineView(.periodic(from: .now, by: 5)) { _ in
-            VStack(spacing: 8) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { statusPills }
-                    VStack(spacing: 8) {
-                        HStack(spacing: 8) {
-                            connectionPill
-                            if let battery = watch.batteryLevel { batteryPill(battery) }
-                        }
-                        
-                        if watch.connectionState == .ready { findButton }
-                    }
-                }
-                Text(syncLine)
-                    .font(Theme.sans(12, relativeTo: .caption))
-                    .foregroundStyle(Theme.sub)
-                    .multilineTextAlignment(.center)
-            }
-        }
-    }
-
-    @ViewBuilder private var statusPills: some View {
-        connectionPill
-        if let battery = watch.batteryLevel { batteryPill(battery) }
-        if watch.connectionState == .ready { findButton }
-    }
-
-    private var findButton: some View {
-        Button {
-            findWatch()
-        } label: {
-            HStack(spacing: 6) {
-                if findingWatch {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Image(systemName: "dot.radiowaves.left.and.right")
-                        .font(.system(size: 12, weight: .semibold))
-                }
-                Text(findingWatch ? String(localized: "Vibrating…") : String(localized: "Locate"))
-                    .font(Theme.sans(13, weight: .semibold, relativeTo: .footnote))
-            }
-            .foregroundStyle(Theme.accent)
-        }
-        .buttonStyle(.plain)
-        .pill()
-        .disabled(findingWatch)
-        .accessibilityLabel("Find watch")
-        .accessibilityHint("Vibrates the watch so you can locate it")
-    }
-
-    private func findWatch() {
-        findingWatch = true
-        Task {
-            do {
-                if let confirmed = try await watch.findActiveWatchAndConfirm() {
-                    await MainActor.run {
-                        confirmed
-                            ? ToastCenter.shared.success(
-                                String(localized: "Found — confirmed on the watch"))
-                            : ToastCenter.shared.error(
-                                String(localized: "No response — vibration timed out"))
-                    }
-                }
-            } catch {
-                await MainActor.run { ToastCenter.shared.error(error.localizedDescription) }
-            }
-            await MainActor.run { findingWatch = false }
-        }
-    }
-    
     /// Pull-to-refresh: forces a full read off the watch (config/battery,
     /// activity file, installed apps + watchface preview) rather than
     /// waiting on the periodic-maintenance throttle.
@@ -243,118 +88,6 @@ struct DashboardView: View {
         } catch {
             await MainActor.run { ToastCenter.shared.error(error.localizedDescription) }
         }
-    }
-
-    private func pair() {
-        pairing = true
-        Task {
-            do {
-                try await watch.performDevicePairing()
-                await MainActor.run {
-                    ToastCenter.shared.success(String(localized: "Pairing succeeded"))
-                }
-            } catch {
-                await MainActor.run {
-                    ToastCenter.shared.error(
-                        String(localized: "Pairing: \(error.localizedDescription)"))
-                }
-            }
-            await MainActor.run { pairing = false }
-        }
-    }
-
-    
-    private var isActiveReady: Bool {
-        watch.connectionState == .ready
-    }
-    private var canManageHardware: Bool { isActiveReady && kind != .misfitQ }
-    
-    private var pairingAction: (() -> Void)? {
-        guard canManageHardware, !pairing, !(watch.isDevicePaired ?? false) else { return nil }
-        return { pair() }
-    }
-
-    private var connectionPill: some View {
-        HStack(spacing: 7) {
-            Circle()
-                .fill(connState.dot)
-                .frame(width: 8, height: 8)
-                .overlay(Circle().strokeBorder(connState.halo, lineWidth: 3).scaleEffect(1.75))
-            Text(connState.label)
-                .font(Theme.sans(13, weight: .semibold, relativeTo: .footnote))
-                .tracking(0.1)
-                .foregroundStyle(Theme.ink)
-        }
-        .pill()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(connState.label)
-        .onTapGesture {
-            self.pairingAction?()
-        }
-    }
-
-    private func batteryPill(_ level: Int) -> some View {
-        HStack(spacing: 6) {
-            BatteryGlyph(level: level, fill: batteryColor(level))
-            Text("\(level, format: .percent)")
-                .font(Theme.mono(13, weight: .semibold))
-                .foregroundStyle(Theme.ink)
-        }
-        .pill()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Battery \(level, format: .percent)")
-    }
-
-    private func batteryColor(_ level: Int) -> Color {
-        if level <= 15 { return Theme.danger }
-        if level <= 30 { return Theme.warn }
-        return Theme.ink
-    }
-
-    /// Connection state collapsed to the visual states in the design. A
-    /// `.connecting` that's been stuck past `connectingTimeout` (watch out
-    /// of range — the pending CoreBluetooth connect never times out on its
-    /// own) reads as "Disconnected" instead of "Connecting…" forever.
-    private var connState: (dot: Color, halo: Color, label: String) {
-        switch watch.connectionState {
-        case .ready:
-            if watch.isDevicePaired ?? false {
-                return (Theme.success, Theme.success.opacity(0.16), String(localized: "Connected"))
-            }
-            return (Theme.warn, Theme.warn.opacity(0.16), String(localized: "Unpaired"))
-        case .bluetoothOff:
-            return (Theme.warn, Theme.warn.opacity(0.16), String(localized: "Bluetooth off"))
-        case .connecting where isConnectingStalled:
-            return (Theme.danger, Theme.danger.opacity(0.16), String(localized: "Disconnected"))
-        case .connecting, .initializing, .authenticating, .scanning:
-            return (Theme.warn, Theme.warn.opacity(0.16), watch.connectionState.label)
-        case .disconnected, .failed:
-            return (Theme.danger, Theme.danger.opacity(0.16), String(localized: "Disconnected"))
-        }
-    }
-
-    private var isConnectingStalled: Bool {
-        guard let since = connectingSince else { return false }
-        return Date().timeIntervalSince(since) > connectingTimeout
-    }
-
-    private var syncLine: String {
-        guard watch.connectionState != .bluetoothOff else {
-            return String(localized: "Turn on Bluetooth to reconnect")
-        }
-        guard let last = fitness.lastSync(for: registry.activeWatchID) else {
-            return String(localized: "Not synced yet")
-        }
-        // Within a minute of syncing, say "now" rather than let
-        // RelativeDateTimeFormatter phrase a sub-second interval as the future
-        // ("in 0 seconds") — it rounds the difference to zero and defaults to
-        // future phrasing.
-        if last.timeIntervalSinceNow > -60 {
-            return String(localized: "Synced now")
-        }
-        let f = RelativeDateTimeFormatter()
-        f.unitsStyle = .short
-        return String(localized: "Synced \(f.localizedString(for: last, relativeTo: Date()))")
     }
 
     // MARK: Transfer affordance (retained behaviour)
@@ -431,17 +164,6 @@ struct DashboardView: View {
     /// counter tops up only that watch's synced samples, avoiding duplicates.
     private var todaySteps: Int {
         fitness.stepsIncludingLive(onDay: Date())
-    }
-}
-
-// MARK: - Pill styling
-
-private extension View {
-    func pill() -> some View {
-        padding(.vertical, 7)
-            .padding(.horizontal, 13)
-            .background(Capsule().fill(Theme.card))
-            .overlay(Capsule().strokeBorder(Theme.line, lineWidth: 1))
     }
 }
 
@@ -526,30 +248,5 @@ private struct MetricTile: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(label))
         .accessibilityValue(value)
-    }
-}
-
-// MARK: - Battery glyph (outline + level fill), matching the handoff SVG.
-
-private struct BatteryGlyph: View {
-    let level: Int
-    let fill: Color
-
-    var body: some View {
-        // Drawn in the handoff's 26×13 viewBox, then scaled to 22×11.
-        Canvas { ctx, _ in
-            let body = CGRect(x: 1, y: 1, width: 21, height: 11)
-            ctx.stroke(Path(roundedRect: body, cornerRadius: 3.2),
-                       with: .color(Theme.ink.opacity(0.3)), lineWidth: 1)
-            let nub = CGRect(x: 23.4, y: 4.2, width: 1.8, height: 4.6)
-            ctx.fill(Path(roundedRect: nub, cornerRadius: 0.9),
-                     with: .color(Theme.ink.opacity(0.3)))
-            let w = CGFloat(max(0, min(100, level))) / 100 * 17
-            let inner = CGRect(x: 2.8, y: 2.8, width: w, height: 7.4)
-            ctx.fill(Path(roundedRect: inner, cornerRadius: 1.6), with: .color(fill))
-        }
-        .frame(width: 26, height: 13)
-        .scaleEffect(22.0 / 26.0)
-        .frame(width: 22, height: 11)
     }
 }
