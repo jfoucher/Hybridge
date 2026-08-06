@@ -55,6 +55,11 @@ final class WatchSkinStore: ObservableObject {
     /// skin instead of whatever `shared` currently has loaded.
     private let pinnedWatchID: UUID?
 
+    /// The in-flight `reload()`, cancelled and replaced by the next one so a
+    /// slow load from a stale call (e.g. superseded by a fast watch switch)
+    /// can never land after — and clobber — a newer one's result.
+    private var loadTask: Task<Void, Never>?
+
     private init() {
         pinnedWatchID = nil
         reload()
@@ -81,10 +86,44 @@ final class WatchSkinStore: ObservableObject {
         FileManager.default.fileExists(atPath: documentsURL(for: slot).path)
     }
 
+    /// Re-reads every slot from disk. The actual file reads and PNG decodes
+    /// (up to three full-resolution images, `recommendedSize` 1500×2102) run
+    /// off the main actor — this used to decode synchronously right here,
+    /// which is cheap for one store but not for `WatchCarousel` re-creating a
+    /// pinned store per non-active roster watch every time the Watch tab is
+    /// revisited (the custom tab container tears down and rebuilds the
+    /// inactive tab's view state on every switch, so this ran on every
+    /// visit, not just the first): with a couple of registered watches and
+    /// custom skins, that was blocking the main thread for the whole
+    /// three-image decode, i.e. exactly the multi-second freeze on tab
+    /// change this was tracked down from.
     func reload() {
-        caseImage = load(.caseBody)
-        hourHandImage = load(.hourHand)
-        minuteHandImage = load(.minuteHand)
+        loadTask?.cancel()
+        let caseCandidates = resolvedPaths(for: .caseBody)
+        let hourCandidates = resolvedPaths(for: .hourHand)
+        let minuteCandidates = resolvedPaths(for: .minuteHand)
+        loadTask = Task.detached(priority: .userInitiated) { [weak self] in
+            let loadedCase = Self.firstImage(in: caseCandidates)
+            let loadedHour = Self.firstImage(in: hourCandidates)
+            let loadedMinute = Self.firstImage(in: minuteCandidates)
+            guard let self, !Task.isCancelled else { return }
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+                self.caseImage = loadedCase
+                self.hourHandImage = loadedHour
+                self.minuteHandImage = loadedMinute
+            }
+        }
+    }
+
+    /// First path in `candidates` (preference order) that decodes as an
+    /// image. `nonisolated` so it runs on the detached task's own thread
+    /// rather than hopping to the main actor per call.
+    nonisolated private static func firstImage(in candidates: [String]) -> UIImage? {
+        for path in candidates {
+            if let image = UIImage(contentsOfFile: path) { return image }
+        }
+        return nil
     }
 
     /// Save imported PNG data for a slot (nil clears the user import so the
@@ -127,17 +166,17 @@ final class WatchSkinStore: ObservableObject {
 
     // MARK: - Loading
 
-    private func load(_ slot: Slot) -> UIImage? {
-        let userURL = documentsURL(for: slot)
-        if let image = UIImage(contentsOfFile: userURL.path) {
-            return image
-        }
+    /// Candidate file paths for a slot, most-preferred first — user import,
+    /// then bundled default. Pure path/URL lookup, no disk I/O, so it's cheap
+    /// to resolve on the main actor before handing the list to the
+    /// background task that does the actual reading.
+    private func resolvedPaths(for slot: Slot) -> [String] {
+        var paths = [documentsURL(for: slot).path]
         if let bundleURL = Bundle.main.url(forResource: slot.rawValue, withExtension: "png",
-                                           subdirectory: "watch_skin"),
-           let image = UIImage(contentsOfFile: bundleURL.path) {
-            return image
+                                           subdirectory: "watch_skin") {
+            paths.append(bundleURL.path)
         }
-        return nil
+        return paths
     }
 
     private func documentsURL(for slot: Slot) -> URL {
